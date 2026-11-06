@@ -1,0 +1,6 @@
+customtkinter>=6.0.0
+Pillow>=10.0.0
+argon2-cffi>=23.1.0
+darkdetect>=0.8.0
+pyinstaller>=6.0.0
+comtypes>=1.4.0

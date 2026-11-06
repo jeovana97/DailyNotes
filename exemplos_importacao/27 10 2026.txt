@@ -1,0 +1,11 @@
+27/10/2026 - Conclusão do Sistema de Diário Inteligente
+
+- Finalizado desenvolvimento do Diário de Anotações Desktop.
+- Todas as funcionalidades testadas e validadas:
+  * Autenticação e segurança com hash Argon2id / PBKDF2
+  * Pesquisa avançada instantânea insensível a acentos e maiúsculas
+  * Importação em lote preservando codificações UTF-8 e Windows-1252
+  * Calendário interativo com destaque de anotações
+  * Backup e restauração com API nativa do SQLite
+  * Exportação para TXT e CSV
+  * Suporte a compilação de executável Windows via PyInstaller

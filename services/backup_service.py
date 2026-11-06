@@ -1,0 +1,384 @@
+import os
+import csv
+import shutil
+import sqlite3
+import logging
+import datetime
+from typing import List, Dict, Any, Tuple, Optional
+import config
+from database.connection import get_connection
+from database.schema import CREATE_BACKUP_SETTINGS_TABLE
+from models.diary import DiaryEntry
+from utils.date_utils import format_date_br, get_current_timestamp, get_today_iso
+
+logger = logging.getLogger(__name__)
+
+
+class BackupService:
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or config.DB_PATH
+        self._ensure_settings_table()
+
+    def _ensure_settings_table(self) -> None:
+        """Garante que a tabela de configuração de backup automático exista no banco."""
+        try:
+            conn = get_connection(self.db_path)
+            try:
+                with conn:
+                    conn.execute(CREATE_BACKUP_SETTINGS_TABLE)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning("Aviso ao verificar tabela backup_settings: %s", e)
+
+    def get_auto_backup_settings(self) -> Dict[str, Any]:
+        """Retorna as configurações atuais de backup automático."""
+        default_dir = os.path.join(config.DATA_DIR, "backups")
+        defaults = {
+            "enabled": False,
+            "target_dir": default_dir,
+            "schedule_date": get_today_iso(),
+            "schedule_time": "18:00",
+            "repeat_daily": True,
+            "last_run_at": "",
+            "last_backup_file": "",
+            "updated_at": "",
+        }
+        try:
+            conn = get_connection(self.db_path)
+            try:
+                row = conn.execute("SELECT * FROM backup_settings WHERE id = 1").fetchone()
+                if not row:
+                    return defaults
+                return {
+                    "enabled": bool(row["enabled"]),
+                    "target_dir": row["target_dir"] or default_dir,
+                    "schedule_date": row["schedule_date"] or get_today_iso(),
+                    "schedule_time": row["schedule_time"] or "18:00",
+                    "repeat_daily": bool(row["repeat_daily"]),
+                    "last_run_at": row["last_run_at"] or "",
+                    "last_backup_file": row["last_backup_file"] or "",
+                    "updated_at": row["updated_at"] or "",
+                }
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning("Erro ao ler configurações de backup automático: %s", e)
+            return defaults
+
+    def save_auto_backup_settings(
+        self,
+        enabled: bool,
+        target_dir: str,
+        schedule_date_iso: str,
+        schedule_time: str,
+        repeat_daily: bool = True,
+    ) -> Tuple[bool, str]:
+        """Valida e salva as configurações de backup automático no banco de dados."""
+        target_dir = (target_dir or "").strip()
+        if not target_dir:
+            return False, "Informe o local (pasta) onde o arquivo de backup será salvo."
+
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+        except Exception as e:
+            return False, f"Não foi possível acessar ou criar a pasta de destino:\n{e}"
+
+        # Valida horário (HH:MM)
+        raw_time = (schedule_time or "").strip()
+        parts = raw_time.split(":")
+        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            return False, "Horário inválido. Informe no formato HH:MM (ex: 18:00 ou 08:30)."
+
+        hour = int(parts[0])
+        minute = int(parts[1])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return False, "Horário inválido. A hora deve estar entre 00 e 23 e os minutos entre 00 e 59."
+
+        normalized_time = f"{hour:02d}:{minute:02d}"
+
+        if not schedule_date_iso:
+            schedule_date_iso = get_today_iso()
+
+        now_ts = get_current_timestamp()
+        try:
+            conn = get_connection(self.db_path)
+            try:
+                with conn:
+                    existing = conn.execute("SELECT id FROM backup_settings WHERE id = 1").fetchone()
+                    if existing:
+                        conn.execute(
+                            """
+                            UPDATE backup_settings
+                            SET enabled = ?,
+                                target_dir = ?,
+                                schedule_date = ?,
+                                schedule_time = ?,
+                                repeat_daily = ?,
+                                updated_at = ?
+                            WHERE id = 1
+                            """,
+                            (
+                                1 if enabled else 0,
+                                target_dir,
+                                schedule_date_iso,
+                                normalized_time,
+                                1 if repeat_daily else 0,
+                                now_ts,
+                            ),
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO backup_settings (
+                                id, enabled, target_dir, schedule_date, schedule_time,
+                                repeat_daily, last_run_at, last_backup_file, updated_at
+                            )
+                            VALUES (1, ?, ?, ?, ?, ?, '', '', ?)
+                            """,
+                            (
+                                1 if enabled else 0,
+                                target_dir,
+                                schedule_date_iso,
+                                normalized_time,
+                                1 if repeat_daily else 0,
+                                now_ts,
+                            ),
+                        )
+            finally:
+                conn.close()
+
+            status_txt = "ATIVADO" if enabled else "DESATIVADO"
+            return True, f"Configuração de Backup Automático ({status_txt}) salva com sucesso!"
+        except Exception as e:
+            logger.error("Erro ao salvar configurações de backup automático: %s", e)
+            return False, f"Erro ao salvar configuração: {e}"
+
+    def check_and_run_due_auto_backup(
+        self, now: Optional[datetime.datetime] = None
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Verifica se há um backup automático agendado pendente para execução no momento atual.
+        Se estiver no horário/data programados e ainda não tiver sido executado para o ciclo,
+        gera o arquivo .db automaticamente na pasta configurada.
+        Retorna (executou_backup, caminho_do_arquivo).
+        """
+        settings = self.get_auto_backup_settings()
+        if not settings.get("enabled"):
+            return False, None
+
+        target_dir = (settings.get("target_dir") or "").strip()
+        if not target_dir:
+            return False, None
+
+        now_dt = now or datetime.datetime.now()
+        today_iso = now_dt.strftime("%Y-%m-%d")
+        now_ts = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        sched_date = settings.get("schedule_date") or today_iso
+        sched_time = settings.get("schedule_time") or "18:00"
+        repeat_daily = bool(settings.get("repeat_daily"))
+        last_run_at = settings.get("last_run_at") or ""
+
+        if repeat_daily:
+            # Se a data inicial agendada for no futuro, aguarda chegar na data
+            if today_iso < sched_date:
+                return False, None
+            due_timestamp = f"{today_iso} {sched_time}:00"
+        else:
+            # Executa na data e horário específicos configurados
+            due_timestamp = f"{sched_date} {sched_time}:00"
+
+        if now_ts < due_timestamp:
+            return False, None
+
+        if last_run_at and last_run_at >= due_timestamp:
+            return False, None
+
+        filename = f"backup_diario_auto_{now_dt.strftime('%Y%m%d_%H%M%S')}.db"
+        dest_file_path = os.path.join(target_dir, filename)
+
+        ok, _ = self.create_database_backup(dest_file_path)
+        if not ok:
+            return False, None
+
+        try:
+            conn = get_connection(self.db_path)
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        UPDATE backup_settings
+                        SET last_run_at = ?, last_backup_file = ?
+                        WHERE id = 1
+                        """,
+                        (now_ts, dest_file_path),
+                    )
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning("Erro ao registrar execução do backup automático: %s", e)
+
+        logger.info("Backup automático gerado com sucesso em: %s", dest_file_path)
+        return True, dest_file_path
+
+    def create_database_backup(self, destination_file_path: str) -> Tuple[bool, str]:
+        """
+        Gera uma cópia de segurança (backup) consistente do banco de dados SQLite
+        utilizando a API nativa de backup do SQLite (conn.backup), evitando inconsistências
+        mesmo que haja leituras ou escritas simultâneas.
+        """
+        if not destination_file_path:
+            return False, "Caminho de destino do backup não informado."
+
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(destination_file_path)), exist_ok=True)
+
+            source_conn = get_connection(self.db_path)
+            dest_conn = sqlite3.connect(destination_file_path)
+
+            try:
+                # Realiza o backup atômico
+                source_conn.backup(dest_conn)
+            finally:
+                dest_conn.close()
+                source_conn.close()
+
+            return True, f"Backup realizado com sucesso em:\n{destination_file_path}"
+        except Exception as e:
+            logger.error("Erro ao criar backup do banco de dados: %s", e)
+            return False, f"Falha ao realizar backup: {str(e)}"
+
+    def restore_database_backup(self, backup_file_path: str) -> Tuple[bool, str]:
+        """
+        Restaura o banco de dados a partir de um arquivo de backup.
+        Passos de segurança:
+        1. Valida se o arquivo de backup é um banco SQLite válido e contém as tabelas necessárias.
+        2. Cria uma cópia de segurança do banco atual antes de sobrescrever.
+        3. Realiza a restauração segura via backup API ou cópia segura.
+        """
+        if not os.path.isfile(backup_file_path):
+            return False, "Arquivo de backup não encontrado."
+
+        # 1. Validação do arquivo de backup
+        try:
+            test_conn = sqlite3.connect(backup_file_path)
+            cursor = test_conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users', 'diaries')")
+            tables = [row[0] for row in cursor.fetchall()]
+            test_conn.close()
+
+            if "users" not in tables or "diaries" not in tables:
+                return False, "O arquivo selecionado não é um backup válido do Diário de Anotações (tabelas ausentes)."
+        except Exception as e:
+            return False, f"Arquivo corrompido ou formato SQLite inválido: {str(e)}"
+
+        # 2. Cópia preventiva de segurança do banco atual
+        if os.path.exists(self.db_path):
+            safety_copy = f"{self.db_path}.safety_{int(sqlite3.sqlite_version_info[0])}.bak"
+            try:
+                shutil.copy2(self.db_path, safety_copy)
+            except Exception as e:
+                logger.warning("Não foi possível criar cópia preventiva de segurança: %s", e)
+
+        # 3. Restauração atômica
+        try:
+            backup_conn = sqlite3.connect(backup_file_path)
+            target_conn = get_connection(self.db_path)
+            try:
+                backup_conn.backup(target_conn)
+            finally:
+                target_conn.close()
+                backup_conn.close()
+
+            from database.migrations import init_db
+            init_db(self.db_path)
+
+            return True, "Banco de dados restaurado com sucesso!"
+        except Exception as e:
+            logger.error("Erro durante a restauração do banco: %s", e)
+            return False, f"Erro ao restaurar banco de dados: {str(e)}"
+
+    def export_entry_to_txt(self, entry: DiaryEntry, target_file_path: str) -> Tuple[bool, str]:
+        """
+        Exporta uma única anotação do diário para um arquivo TXT formatado em UTF-8.
+        """
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(target_file_path)), exist_ok=True)
+            data_formatada = format_date_br(entry.entry_date)
+            autor = entry.author_name or "Usuário"
+
+            header = (
+                f"====================================================\n"
+                f"DIÁRIO DE ANOTAÇÕES - {data_formatada}\n"
+                f"Autor: {autor}\n"
+                f"Última alteração: {entry.updated_at}\n"
+                f"====================================================\n\n"
+            )
+
+            with open(target_file_path, "w", encoding="utf-8") as f:
+                f.write(header)
+                f.write(entry.content)
+
+            return True, f"Anotação exportada com sucesso para:\n{target_file_path}"
+        except Exception as e:
+            return False, f"Erro ao exportar anotação: {str(e)}"
+
+    def export_entries_to_folder(self, entries: List[DiaryEntry], target_dir: str) -> Tuple[int, int, str]:
+        """
+        Exporta múltiplas anotações para uma pasta, nomeando cada arquivo como 'DD MM AAAA.txt'.
+        Retorna (exportados, erros, mensagem).
+        """
+        if not os.path.isdir(target_dir):
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+            except Exception as e:
+                return 0, len(entries), f"Pasta de destino inválida: {str(e)}"
+
+        exported = 0
+        errors = 0
+
+        for entry in entries:
+            # Formato do nome: DD MM AAAA.txt
+            parts = entry.entry_date.split("-")
+            if len(parts) == 3:
+                filename = f"{parts[2]} {parts[1]} {parts[0]}.txt"
+            else:
+                filename = f"{entry.entry_date}.txt"
+
+            target_path = os.path.join(target_dir, filename)
+            try:
+                with open(target_path, "w", encoding="utf-8") as f:
+                    f.write(entry.content)
+                exported += 1
+            except Exception:
+                errors += 1
+
+        return exported, errors, f"{exported} anotações exportadas com sucesso ({errors} erros)."
+
+    def export_search_results_to_csv(self, search_results: List[Dict[str, Any]], target_csv_path: str) -> Tuple[bool, str]:
+        """
+        Exporta a lista de resultados da pesquisa avançada para um arquivo CSV formatado,
+        utilizando UTF-8 com BOM (utf-8-sig) para compatibilidade perfeita com o Microsoft Excel.
+        """
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(target_csv_path)), exist_ok=True)
+
+            with open(target_csv_path, "w", newline="", encoding="utf-8-sig") as csvfile:
+                fieldnames = ["Data", "Usuário", "Nome Completo", "Trecho Encontrado", "Última Alteração", "Conteúdo Completo"]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=";")
+                writer.writeheader()
+
+                for item in search_results:
+                    writer.writerow({
+                        "Data": format_date_br(item.get("entry_date", "")),
+                        "Usuário": item.get("username", ""),
+                        "Nome Completo": item.get("full_name", ""),
+                        "Trecho Encontrado": item.get("snippet", ""),
+                        "Última Alteração": item.get("updated_at", ""),
+                        "Conteúdo Completo": item.get("content", "").replace("\r\n", " ").replace("\n", " "),
+                    })
+
+            return True, f"Resultados exportados para CSV com sucesso em:\n{target_csv_path}"
+        except Exception as e:
+            return False, f"Erro ao exportar CSV: {str(e)}"

@@ -1,0 +1,29 @@
+# Byte-compiled / cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Artefatos de compilação do PyInstaller
+build/
+dist/
+
+# Banco de dados local, backups e logs de execução (dados pessoais do usuário)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.bak
+*.log
+*.rar
+*.zip
+
+# Arquivos de sistema / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

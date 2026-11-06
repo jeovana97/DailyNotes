@@ -1,0 +1,6 @@
+02/10/2026 - Atendimento e Ocorrências
+
+- Contato com o cliente Alpha Tecnologia a respeito de parametrização fiscal.
+- Atenção: foi identificado um erro na emissão de notas fiscais devido a instabilidade no webservice da SEFAZ.
+- Aberto chamado técnico prioritário sob o número #8492.
+- Situação normalizada às 16:45 após reenvio em contingência.

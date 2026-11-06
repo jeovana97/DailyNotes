@@ -19,6 +19,18 @@ from utils.date_utils import (
 )
 from views.components.dialogs import UnsavedChangesDialog, show_message
 from services.spellcheck_service import WindowsSpellCheckService, SpellingError
+from utils.syntax_highlighter import (
+    convert_selection_case,
+    format_and_highlight_xml,
+    format_and_highlight_sql,
+    clear_syntax_tags,
+    auto_highlight_content,
+    configure_syntax_tags,
+    enable_undo_redo,
+    perform_undo,
+    perform_redo,
+    reset_undo_stack,
+)
 
 
 class DiaryView(ctk.CTkFrame):
@@ -299,6 +311,137 @@ class DiaryView(ctk.CTkFrame):
         )
         self.editor_container.pack(fill="both", expand=True, padx=20, pady=(0, 10))
 
+        # 3.1 Barra de Formatação de Texto (Desfazer / MAIÚSCULO / minúsculo / XML / SQL)
+        self.format_bar = ctk.CTkFrame(
+            self.editor_container,
+            height=38,
+            corner_radius=8,
+            fg_color=config.COLORS["card_dark_alt"],
+        )
+        self.format_bar.pack(fill="x", padx=12, pady=(10, 0))
+
+        self.btn_undo = ctk.CTkButton(
+            self.format_bar,
+            text="↩️ Desfazer (Ctrl+Z)",
+            width=130,
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=self._on_undo_clicked,
+        )
+        self.btn_undo.pack(side="left", padx=(8, 3), pady=5)
+
+        self.btn_redo = ctk.CTkButton(
+            self.format_bar,
+            text="↪️ Refazer",
+            width=82,
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=12),
+            fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=self._on_redo_clicked,
+        )
+        self.btn_redo.pack(side="left", padx=3, pady=5)
+
+        self.lbl_sep_undo = ctk.CTkLabel(
+            self.format_bar,
+            text="|",
+            font=ctk.CTkFont(size=13),
+            text_color=config.COLORS["border_dark"],
+        )
+        self.lbl_sep_undo.pack(side="left", padx=5, pady=5)
+
+        self.lbl_format_tools = ctk.CTkLabel(
+            self.format_bar,
+            text="✨ Formatar:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLORS["text_muted"],
+        )
+        self.lbl_format_tools.pack(side="left", padx=(2, 6), pady=5)
+
+        self.btn_uppercase = ctk.CTkButton(
+            self.format_bar,
+            text="🔠 MAIÚSCULO",
+            width=110,
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=self._on_uppercase_clicked,
+        )
+        self.btn_uppercase.pack(side="left", padx=3, pady=5)
+
+        self.btn_lowercase = ctk.CTkButton(
+            self.format_bar,
+            text="🔡 minúsculo",
+            width=110,
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=self._on_lowercase_clicked,
+        )
+        self.btn_lowercase.pack(side="left", padx=3, pady=5)
+
+        self.lbl_sep_syntax = ctk.CTkLabel(
+            self.format_bar,
+            text="|",
+            font=ctk.CTkFont(size=13),
+            text_color=config.COLORS["border_dark"],
+        )
+        self.lbl_sep_syntax.pack(side="left", padx=6, pady=5)
+
+        self.btn_format_xml = ctk.CTkButton(
+            self.format_bar,
+            text="</> XML (Cor)",
+            width=110,
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color="#0284C7",
+            text_color=config.COLORS["button_text"],
+            command=self._on_format_xml_clicked,
+        )
+        self.btn_format_xml.pack(side="left", padx=3, pady=5)
+
+        self.btn_format_sql = ctk.CTkButton(
+            self.format_bar,
+            text="🗄️ SQL (Cor)",
+            width=110,
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color="#BE185D",
+            text_color=config.COLORS["button_text"],
+            command=self._on_format_sql_clicked,
+        )
+        self.btn_format_sql.pack(side="left", padx=3, pady=5)
+
+        self.btn_clear_colors = ctk.CTkButton(
+            self.format_bar,
+            text="🎨 Limpar Cor",
+            width=100,
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            hover_color=config.COLORS["card_dark"],
+            text_color=config.COLORS["text_muted"],
+            command=self._on_clear_syntax_colors_clicked,
+        )
+        self.btn_clear_colors.pack(side="left", padx=3, pady=5)
+
         self.txt_content = ctk.CTkTextbox(
             self.editor_container,
             wrap="word",
@@ -307,13 +450,18 @@ class DiaryView(ctk.CTkFrame):
             border_width=0,
             fg_color="transparent",
             text_color=config.COLORS["text_dark"],
+            undo=True,
+            autoseparators=True,
+            maxundo=-1,
         )
-        self.txt_content.pack(fill="both", expand=True, padx=15, pady=15)
+        self.txt_content.pack(fill="both", expand=True, padx=15, pady=(6, 15))
         self.txt_content.bind("<KeyRelease>", self._on_text_modified)
         self.txt_content._textbox.bind("<<Paste>>", self._on_paste)
+        enable_undo_redo(self.txt_content, on_change_callback=self._on_text_modified)
 
-        # Configura sublinhado de erros ortográficos e menu de contexto do botão direito
+        # Configura sublinhado de erros ortográficos, cores de sintaxe e menu de contexto do botão direito
         self._configure_spellcheck_tags()
+        configure_syntax_tags(self.txt_content._textbox)
         self.txt_content._textbox.bind("<Button-3>", self._on_textbox_context_menu)
         self.txt_content._textbox.bind("<Button-2>", self._on_textbox_context_menu)
 
@@ -380,6 +528,8 @@ class DiaryView(ctk.CTkFrame):
         content = self.active_entry.content or ""
         self.txt_content.delete("1.0", "end")
         self.txt_content.insert("1.0", content)
+        reset_undo_stack(self.txt_content)
+        auto_highlight_content(self.txt_content)
 
         self.has_unsaved_changes = False
         self._update_status_indicator(saved=True, timestamp=self.active_entry.updated_at)
@@ -516,7 +666,15 @@ class DiaryView(ctk.CTkFrame):
         """Prepara uma nova anotação em branco para a data selecionada."""
         if not self.confirm_discard_if_unsaved():
             return
+        try:
+            self.txt_content._textbox.edit_separator()
+        except Exception:
+            pass
         self.txt_content.delete("1.0", "end")
+        try:
+            self.txt_content._textbox.edit_separator()
+        except Exception:
+            pass
         self.txt_content.focus_set()
         self._on_text_modified()
 
@@ -639,22 +797,28 @@ class DiaryView(ctk.CTkFrame):
         errors = self.spell_service.check_text(text)
         self._clear_spelling_tags()
 
+        tb = self.txt_content._textbox
+        active_errors_count = 0
         for err in errors:
             start_idx = f"1.0 + {err.start} chars"
             end_idx = f"1.0 + {err.start + err.length} chars"
             try:
-                self.txt_content._textbox.tag_add("spelling_error", start_idx, end_idx)
+                # Não sublinha palavras que já fazem parte de tags XML ou comandos SQL coloridos
+                if any(t.startswith("syntax_") for t in tb.tag_names(start_idx)):
+                    continue
+                tb.tag_add("spelling_error", start_idx, end_idx)
+                active_errors_count += 1
             except Exception:
                 pass
 
         lang = self.spell_service.active_language or "pt-BR"
-        if not errors:
+        if active_errors_count == 0:
             self.btn_spell_status.configure(
                 text=f"🔤 Ortografia: {lang} (OK)",
                 text_color=config.COLORS["text_muted"],
             )
         else:
-            qtd = len(errors)
+            qtd = active_errors_count
             sufixo = "erro" if qtd == 1 else "erros"
             self.btn_spell_status.configure(
                 text=f"🔤 {qtd} {sufixo}",
@@ -758,6 +922,15 @@ class DiaryView(ctk.CTkFrame):
         # Comandos padrão de edição
         has_selection = bool(text_widget.tag_ranges("sel"))
         menu.add_command(
+            label="↩️ Desfazer (Ctrl+Z)",
+            command=self._on_undo_clicked,
+        )
+        menu.add_command(
+            label="↪️ Refazer (Ctrl+Y)",
+            command=self._on_redo_clicked,
+        )
+        menu.add_separator()
+        menu.add_command(
             label="✂ Recortar",
             state="normal" if has_selection else "disabled",
             command=lambda: text_widget.event_generate("<<Cut>>"),
@@ -770,6 +943,30 @@ class DiaryView(ctk.CTkFrame):
         menu.add_command(
             label="📄 Colar",
             command=self._on_paste,
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="🔠 Converter Seleção para MAIÚSCULO",
+            state="normal" if has_selection else "disabled",
+            command=self._on_uppercase_clicked,
+        )
+        menu.add_command(
+            label="🔡 Converter Seleção para minúsculo",
+            state="normal" if has_selection else "disabled",
+            command=self._on_lowercase_clicked,
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="</> Formatar / Colorir como XML",
+            command=self._on_format_xml_clicked,
+        )
+        menu.add_command(
+            label="🗄️ Formatar / Colorir como SQL",
+            command=self._on_format_sql_clicked,
+        )
+        menu.add_command(
+            label="🎨 Limpar Cores de Sintaxe",
+            command=self._on_clear_syntax_colors_clicked,
         )
         menu.add_separator()
         menu.add_command(
@@ -790,10 +987,26 @@ class DiaryView(ctk.CTkFrame):
     def _replace_spelling_error(self, start_idx: str, end_idx: str, replacement: str):
         """Substitui uma palavra com erro pela sugestão escolhida pelo usuário."""
         text_widget = self.txt_content._textbox
+        try:
+            text_widget.edit_separator()
+        except Exception:
+            pass
         text_widget.delete(start_idx, end_idx)
         text_widget.insert(start_idx, replacement)
+        try:
+            text_widget.edit_separator()
+        except Exception:
+            pass
         self._on_text_modified()
         self._run_spellcheck()
+
+    def _on_undo_clicked(self):
+        """Desfaz a última ação (digitação, colagem ou formatação)."""
+        perform_undo(self.txt_content, on_change_callback=self._on_text_modified)
+
+    def _on_redo_clicked(self):
+        """Refaz a última ação desfeita."""
+        perform_redo(self.txt_content, on_change_callback=self._on_text_modified)
 
     def _add_to_dict_and_refresh(self, word: str):
         """Adiciona ao dicionário personalizado do Windows e re-executa checagem."""
@@ -811,10 +1024,51 @@ class DiaryView(ctk.CTkFrame):
         text_widget.tag_add("sel", "1.0", "end-1c")
         text_widget.mark_set("insert", "1.0")
 
+    def _on_uppercase_clicked(self):
+        """Converte o texto selecionado para MAIÚSCULO."""
+        ok, msg = convert_selection_case(self.txt_content, uppercase=True)
+        if not ok:
+            show_message(self, "Converter para MAIÚSCULO", msg, kind="info")
+            return
+        self._on_text_modified()
+
+    def _on_lowercase_clicked(self):
+        """Converte o texto selecionado para minúsculo."""
+        ok, msg = convert_selection_case(self.txt_content, uppercase=False)
+        if not ok:
+            show_message(self, "Converter para minúsculo", msg, kind="info")
+            return
+        self._on_text_modified()
+
+    def _on_format_xml_clicked(self):
+        """Formata e aplica cores de sintaxe XML ao texto selecionado (ou a toda a nota)."""
+        if not format_and_highlight_xml(self.txt_content, indent_xml=True):
+            show_message(self, "Formatar XML", "Não há texto na anotação para formatar como XML.", kind="info")
+            return
+        self._on_text_modified()
+
+    def _on_format_sql_clicked(self):
+        """Formata e aplica cores de sintaxe SQL ao texto selecionado (ou a toda a nota)."""
+        if not format_and_highlight_sql(self.txt_content, format_keywords=True):
+            show_message(self, "Formatar SQL", "Não há texto na anotação para formatar como SQL.", kind="info")
+            return
+        self._on_text_modified()
+
+    def _on_clear_syntax_colors_clicked(self):
+        """Remove a coloração de sintaxe XML/SQL do trecho selecionado ou de todo o texto."""
+        tb = self.txt_content._textbox
+        sel = tb.tag_ranges("sel")
+        if sel:
+            clear_syntax_tags(tb, tb.index("sel.first"), tb.index("sel.last"))
+        else:
+            clear_syntax_tags(tb, "1.0", "end")
+        self._run_spellcheck()
+
     def _on_paste(self, event=None):
         """
         Trata a colagem de texto no Diário do Dia garantindo que o cursor vá para
-        o fim do texto e role a visualização para exibir a última informação colada.
+        o fim do texto, role a visualização para exibir a última informação colada
+        e registre um separador de Undo para que o Ctrl+Z desfaça exatamente o que foi colado.
         """
         text_widget = self.txt_content._textbox
         try:
@@ -825,12 +1079,24 @@ class DiaryView(ctk.CTkFrame):
         if not clipboard_text:
             return "break"
 
+        try:
+            text_widget.edit_separator()
+        except Exception:
+            pass
+
         # Se houver texto selecionado, substitui a seleção
         if text_widget.tag_ranges("sel"):
             text_widget.delete("sel.first", "sel.last")
 
         # Insere o texto colado na posição atual do cursor
         text_widget.insert("insert", clipboard_text)
+
+        try:
+            text_widget.edit_separator()
+        except Exception:
+            pass
+
+        auto_highlight_content(self.txt_content)
 
         # Move o cursor para o fim do texto e rola a visão até a última linha colada
         text_widget.mark_set("insert", "end-1c")

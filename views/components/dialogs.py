@@ -5,6 +5,17 @@ from typing import Optional, Callable, Tuple
 import config
 from services.diary_service import DiaryService
 from utils.date_utils import format_date_br, format_date_long_br
+from utils.syntax_highlighter import (
+    convert_selection_case,
+    format_and_highlight_xml,
+    format_and_highlight_sql,
+    auto_highlight_content,
+    configure_syntax_tags,
+    enable_undo_redo,
+    perform_undo,
+    perform_redo,
+    reset_undo_stack,
+)
 
 
 class UnsavedChangesDialog(ctk.CTkToplevel):
@@ -444,6 +455,79 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         )
         self.text_card.pack(fill="both", expand=True, padx=18, pady=(0, 8))
 
+        # Barra de formatação rápida (exibida ao editar ou para colorir XML/SQL)
+        self.format_bar = ctk.CTkFrame(
+            self.text_card,
+            height=34,
+            corner_radius=8,
+            fg_color=config.COLORS["card_dark_alt"],
+        )
+        self.format_bar.pack(fill="x", padx=12, pady=(10, 0))
+
+        self.lbl_fmt = ctk.CTkLabel(
+            self.format_bar,
+            text="✨ Formatar:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLORS["text_muted"],
+        )
+        self.lbl_fmt.pack(side="left", padx=(10, 6), pady=4)
+
+        self.btn_uppercase = ctk.CTkButton(
+            self.format_bar,
+            text="🔠 MAIÚSCULO",
+            width=105,
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=self._on_uppercase,
+        )
+        self.btn_uppercase.pack(side="left", padx=3, pady=4)
+
+        self.btn_lowercase = ctk.CTkButton(
+            self.format_bar,
+            text="🔡 minúsculo",
+            width=105,
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=self._on_lowercase,
+        )
+        self.btn_lowercase.pack(side="left", padx=3, pady=4)
+
+        self.btn_xml = ctk.CTkButton(
+            self.format_bar,
+            text="</> XML (Cor)",
+            width=105,
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color="#0284C7",
+            text_color=config.COLORS["button_text"],
+            command=self._on_format_xml,
+        )
+        self.btn_xml.pack(side="left", padx=3, pady=4)
+
+        self.btn_sql = ctk.CTkButton(
+            self.format_bar,
+            text="🗄️ SQL (Cor)",
+            width=105,
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color="#BE185D",
+            text_color=config.COLORS["button_text"],
+            command=self._on_format_sql,
+        )
+        self.btn_sql.pack(side="left", padx=3, pady=4)
+
         self.txt_content = ctk.CTkTextbox(
             self.text_card,
             wrap="word",
@@ -452,9 +536,14 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
             border_width=0,
             fg_color="transparent",
             text_color=config.COLORS["text_dark"],
+            undo=True,
+            autoseparators=True,
+            maxundo=-1,
         )
-        self.txt_content.pack(fill="both", expand=True, padx=14, pady=14)
+        self.txt_content.pack(fill="both", expand=True, padx=14, pady=(6, 14))
         self.txt_content.bind("<KeyRelease>", self._on_text_modified)
+        enable_undo_redo(self.txt_content, on_change_callback=self._on_text_modified)
+        configure_syntax_tags(self.txt_content._textbox)
 
         # Tag para destacar termos pesquisados
         try:
@@ -509,6 +598,8 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self.txt_content.configure(state="normal")
         self.txt_content.delete("1.0", "end")
         self.txt_content.insert("1.0", self.original_content)
+        reset_undo_stack(self.txt_content)
+        auto_highlight_content(self.txt_content)
 
         # Destaca termos pesquisados se houver query
         if self.highlight_query:
@@ -517,6 +608,50 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         # Bloqueia para somente leitura
         self.txt_content.configure(state="disabled")
         self._update_meta_and_counts(self.original_content)
+        self._update_format_buttons_state()
+
+    def _update_format_buttons_state(self):
+        case_state = "normal" if self.is_editing else "disabled"
+        self.btn_uppercase.configure(state=case_state)
+        self.btn_lowercase.configure(state=case_state)
+
+    def _on_uppercase(self):
+        if not self.is_editing:
+            return
+        ok, msg = convert_selection_case(self.txt_content, uppercase=True)
+        if not ok:
+            show_message(self, "Converter para MAIÚSCULO", msg, kind="info")
+            return
+        self._on_text_modified()
+
+    def _on_lowercase(self):
+        if not self.is_editing:
+            return
+        ok, msg = convert_selection_case(self.txt_content, uppercase=False)
+        if not ok:
+            show_message(self, "Converter para minúsculo", msg, kind="info")
+            return
+        self._on_text_modified()
+
+    def _on_format_xml(self):
+        was_readonly = not self.is_editing
+        if was_readonly:
+            self.txt_content.configure(state="normal")
+        format_and_highlight_xml(self.txt_content, indent_xml=self.is_editing)
+        if was_readonly:
+            self.txt_content.configure(state="disabled")
+        else:
+            self._on_text_modified()
+
+    def _on_format_sql(self):
+        was_readonly = not self.is_editing
+        if was_readonly:
+            self.txt_content.configure(state="normal")
+        format_and_highlight_sql(self.txt_content, format_keywords=self.is_editing)
+        if was_readonly:
+            self.txt_content.configure(state="disabled")
+        else:
+            self._on_text_modified()
 
     def _highlight_search_terms(self, query: str):
         try:
@@ -567,6 +702,7 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self.btn_save.pack(side="left", padx=(12, 6), pady=8, before=self.btn_copy)
         self.btn_cancel_edit.pack(side="left", padx=6, pady=8, before=self.btn_copy)
 
+        self._update_format_buttons_state()
         self.txt_content.focus_set()
 
     def _cancel_edit_mode(self):

@@ -353,6 +353,20 @@ class BackupView(ctk.CTkFrame):
         )
         self.chk_repeat_daily.pack(side="left")
 
+        # Linha 2.5: Informação da Rotação Semanal (7 dias)
+        retention_row = ctk.CTkFrame(self.auto_backup_box, fg_color="transparent")
+        retention_row.pack(fill="x", padx=16, pady=(0, 8))
+
+        self.lbl_retention_info = ctk.CTkLabel(
+            retention_row,
+            text="🔄 Retenção Semanal (7 dias): os arquivos de backup são mantidos apenas por 7 dias e substituídos automaticamente pelos da próxima semana.",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLORS["primary"],
+            justify="left",
+            anchor="w",
+        )
+        self.lbl_retention_info.pack(side="left", fill="x", expand=True)
+
         # Linha 3: Botão Salvar Configuração + Status do Agendamento
         action_row = ctk.CTkFrame(self.auto_backup_box, fg_color="transparent")
         action_row.pack(fill="x", padx=16, pady=(2, 14))
@@ -615,15 +629,26 @@ class BackupView(ctk.CTkFrame):
         enabled = bool(settings.get("enabled"))
         date_br = format_date_br(settings.get("schedule_date") or get_today_iso())
         time_str = settings.get("schedule_time") or "18:00"
+        retention_days = int(settings.get("retention_days") or 7)
         repeat_txt = "Diariamente" if settings.get("repeat_daily") else f"Em {date_br}"
         last_run = settings.get("last_run_at") or ""
         last_file = settings.get("last_backup_file") or ""
+        target_dir = settings.get("target_dir") or ""
+
+        managed_files = self.backup_service.list_managed_backups(target_dir)
+        files_count = len(managed_files)
 
         if enabled:
-            status_line = f"🟢 Agendado: {repeat_txt} às {time_str} (Início/Data: {date_br})"
+            status_line = (
+                f"🟢 Agendado: {repeat_txt} às {time_str} (Início/Data: {date_br}) "
+                f"| 🔄 Ciclo: {files_count}/{retention_days} dias mantidos"
+            )
             color = config.COLORS["success"]
         else:
-            status_line = f"⚪ Backup automático desativado (Configurado: {date_br} às {time_str})"
+            status_line = (
+                f"⚪ Backup automático desativado (Configurado: {date_br} às {time_str}) "
+                f"| 🔄 Retenção: {retention_days} dias ({files_count} na pasta)"
+            )
             color = config.COLORS["text_muted"]
 
         if last_run:

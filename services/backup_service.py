@@ -1,4 +1,5 @@
 import os
+import re
 import csv
 import shutil
 import sqlite3
@@ -13,8 +14,20 @@ from utils.date_utils import format_date_br, get_current_timestamp, get_today_is
 
 logger = logging.getLogger(__name__)
 
+WEEKDAY_NAMES_PT = [
+    "Segunda-feira",
+    "Terça-feira",
+    "Quarta-feira",
+    "Quinta-feira",
+    "Sexta-feira",
+    "Sábado",
+    "Domingo",
+]
+
 
 class BackupService:
+    DEFAULT_RETENTION_DAYS = 7
+
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or config.DB_PATH
         self._ensure_settings_table()
@@ -26,6 +39,12 @@ class BackupService:
             try:
                 with conn:
                     conn.execute(CREATE_BACKUP_SETTINGS_TABLE)
+                    cursor = conn.execute("PRAGMA table_info(backup_settings)")
+                    cols = {row["name"] for row in cursor.fetchall()}
+                    if "retention_days" not in cols:
+                        conn.execute(
+                            f"ALTER TABLE backup_settings ADD COLUMN retention_days INTEGER NOT NULL DEFAULT {self.DEFAULT_RETENTION_DAYS}"
+                        )
             finally:
                 conn.close()
         except Exception as e:
@@ -40,6 +59,7 @@ class BackupService:
             "schedule_date": get_today_iso(),
             "schedule_time": "18:00",
             "repeat_daily": True,
+            "retention_days": self.DEFAULT_RETENTION_DAYS,
             "last_run_at": "",
             "last_backup_file": "",
             "updated_at": "",
@@ -50,12 +70,19 @@ class BackupService:
                 row = conn.execute("SELECT * FROM backup_settings WHERE id = 1").fetchone()
                 if not row:
                     return defaults
+                row_keys = row.keys()
+                retention_val = (
+                    int(row["retention_days"])
+                    if "retention_days" in row_keys and row["retention_days"]
+                    else self.DEFAULT_RETENTION_DAYS
+                )
                 return {
                     "enabled": bool(row["enabled"]),
                     "target_dir": row["target_dir"] or default_dir,
                     "schedule_date": row["schedule_date"] or get_today_iso(),
                     "schedule_time": row["schedule_time"] or "18:00",
                     "repeat_daily": bool(row["repeat_daily"]),
+                    "retention_days": max(1, retention_val),
                     "last_run_at": row["last_run_at"] or "",
                     "last_backup_file": row["last_backup_file"] or "",
                     "updated_at": row["updated_at"] or "",
@@ -73,6 +100,7 @@ class BackupService:
         schedule_date_iso: str,
         schedule_time: str,
         repeat_daily: bool = True,
+        retention_days: int = DEFAULT_RETENTION_DAYS,
     ) -> Tuple[bool, str]:
         """Valida e salva as configurações de backup automático no banco de dados."""
         target_dir = (target_dir or "").strip()
@@ -100,6 +128,7 @@ class BackupService:
         if not schedule_date_iso:
             schedule_date_iso = get_today_iso()
 
+        retention_days = max(1, int(retention_days or self.DEFAULT_RETENTION_DAYS))
         now_ts = get_current_timestamp()
         try:
             conn = get_connection(self.db_path)
@@ -115,6 +144,7 @@ class BackupService:
                                 schedule_date = ?,
                                 schedule_time = ?,
                                 repeat_daily = ?,
+                                retention_days = ?,
                                 updated_at = ?
                             WHERE id = 1
                             """,
@@ -124,6 +154,7 @@ class BackupService:
                                 schedule_date_iso,
                                 normalized_time,
                                 1 if repeat_daily else 0,
+                                retention_days,
                                 now_ts,
                             ),
                         )
@@ -132,9 +163,9 @@ class BackupService:
                             """
                             INSERT INTO backup_settings (
                                 id, enabled, target_dir, schedule_date, schedule_time,
-                                repeat_daily, last_run_at, last_backup_file, updated_at
+                                repeat_daily, retention_days, last_run_at, last_backup_file, updated_at
                             )
-                            VALUES (1, ?, ?, ?, ?, ?, '', '', ?)
+                            VALUES (1, ?, ?, ?, ?, ?, ?, '', '', ?)
                             """,
                             (
                                 1 if enabled else 0,
@@ -142,17 +173,165 @@ class BackupService:
                                 schedule_date_iso,
                                 normalized_time,
                                 1 if repeat_daily else 0,
+                                retention_days,
                                 now_ts,
                             ),
                         )
             finally:
                 conn.close()
 
+            # Aplica imediatamente a política de retenção de 7 dias na pasta configurada
+            self.cleanup_old_backups(target_dir=target_dir, retention_days=retention_days)
+
             status_txt = "ATIVADO" if enabled else "DESATIVADO"
-            return True, f"Configuração de Backup Automático ({status_txt}) salva com sucesso!"
+            return (
+                True,
+                f"Configuração de Backup Automático ({status_txt}) salva com sucesso! "
+                f"(Retenção semanal ativa: mantém apenas os últimos {retention_days} dias).",
+            )
         except Exception as e:
             logger.error("Erro ao salvar configurações de backup automático: %s", e)
             return False, f"Erro ao salvar configuração: {e}"
+
+    @staticmethod
+    def _extract_backup_datetime(file_path: str) -> datetime.datetime:
+        """
+        Extrai a data/hora de geração de um arquivo de backup pelo padrão no nome
+        (ex: backup_diario_auto_20261106_180000.db) ou pela data de modificação do arquivo.
+        """
+        fname = os.path.basename(file_path)
+        match = re.search(r"(\d{8})(?:_(\d{6}))?", fname)
+        if match:
+            date_part = match.group(1)
+            time_part = match.group(2) or "000000"
+            try:
+                return datetime.datetime.strptime(f"{date_part}_{time_part}", "%Y%m%d_%H%M%S")
+            except ValueError:
+                pass
+        try:
+            mtime = os.path.getmtime(file_path)
+            return datetime.datetime.fromtimestamp(mtime)
+        except Exception:
+            return datetime.datetime.now()
+
+    @staticmethod
+    def _is_managed_backup_file(filename: str) -> bool:
+        """Verifica se o arquivo na pasta é um backup gerenciado do sistema (.db)."""
+        lower = filename.lower()
+        return lower.startswith("backup_diario") and lower.endswith(".db")
+
+    def list_managed_backups(self, target_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Lista os arquivos de backup gerenciados na pasta informada (ou na pasta do backup automático),
+        ordenados do mais recente para o mais antigo.
+        """
+        if not target_dir:
+            settings = self.get_auto_backup_settings()
+            target_dir = settings.get("target_dir") or ""
+
+        if not target_dir or not os.path.isdir(target_dir):
+            return []
+
+        items: List[Dict[str, Any]] = []
+        try:
+            for entry in os.scandir(target_dir):
+                if not entry.is_file() or not self._is_managed_backup_file(entry.name):
+                    continue
+                dt = self._extract_backup_datetime(entry.path)
+                try:
+                    size_bytes = entry.stat().st_size
+                except Exception:
+                    size_bytes = 0
+                items.append(
+                    {
+                        "filename": entry.name,
+                        "path": entry.path,
+                        "datetime": dt,
+                        "date_iso": dt.strftime("%Y-%m-%d"),
+                        "weekday": WEEKDAY_NAMES_PT[dt.weekday()],
+                        "size_bytes": size_bytes,
+                    }
+                )
+        except Exception as e:
+            logger.warning("Erro ao listar backups na pasta %s: %s", target_dir, e)
+
+        items.sort(key=lambda x: (x["datetime"], x["filename"]), reverse=True)
+        return items
+
+    def cleanup_old_backups(
+        self,
+        target_dir: str,
+        retention_days: int = DEFAULT_RETENTION_DAYS,
+        now: Optional[datetime.datetime] = None,
+        keep_file: Optional[str] = None,
+    ) -> List[str]:
+        """
+        Aplica a rotação semanal / retenção de `retention_days` (padrão: 7 dias):
+        1. Mantém apenas os arquivos dos últimos `retention_days` dias (ex: 7 dias).
+        2. Quando um novo backup é gerado na semana seguinte (ex: 7 dias depois, no mesmo dia da semana)
+           ou no mesmo dia, o arquivo antigo correspondente é removido/substituído pelo novo.
+        3. Garante que no máximo `retention_days` arquivos diários permaneçam na pasta.
+        Retorna a lista de caminhos dos arquivos removidos.
+        """
+        if not target_dir or not os.path.isdir(target_dir):
+            return []
+
+        retention_days = max(1, int(retention_days or self.DEFAULT_RETENTION_DAYS))
+        ref_dt = now or datetime.datetime.now()
+        ref_date = ref_dt.date()
+        # Janela de 7 dias: hoje (dia 0) até 6 dias atrás = 7 dias no total.
+        # Qualquer arquivo com idade >= 7 dias (ex: mesmo dia da semana passada) é substituído/removido.
+        oldest_allowed_date = ref_date - datetime.timedelta(days=retention_days - 1)
+
+        keep_norm = os.path.normcase(os.path.abspath(keep_file)) if keep_file else None
+        backups = self.list_managed_backups(target_dir)
+
+        # Garante que keep_file, se existir, seja tratado como prioridade máxima no seu dia
+        if keep_norm:
+            backups.sort(
+                key=lambda x: (
+                    1 if os.path.normcase(os.path.abspath(x["path"])) == keep_norm else 0,
+                    x["datetime"],
+                    x["filename"],
+                ),
+                reverse=True,
+            )
+
+        removed_files: List[str] = []
+        seen_dates = set()
+        kept_count = 0
+
+        for item in backups:
+            fpath = item["path"]
+            fpath_norm = os.path.normcase(os.path.abspath(fpath))
+            file_date = item["datetime"].date()
+
+            is_explicit_keep = keep_norm is not None and fpath_norm == keep_norm
+
+            should_delete = False
+            if not is_explicit_keep:
+                # 1. Expirado pela janela de 7 dias (idade >= retention_days, ou seja, da semana passada ou anterior)
+                if file_date < oldest_allowed_date:
+                    should_delete = True
+                # 2. Já existe um backup mais recente para esta mesma data (substitui backup anterior do mesmo dia)
+                elif file_date in seen_dates:
+                    should_delete = True
+                # 3. Já atingiu o limite máximo de 7 arquivos diários mantidos
+                elif kept_count >= retention_days:
+                    should_delete = True
+
+            if should_delete:
+                try:
+                    os.remove(fpath)
+                    removed_files.append(fpath)
+                    logger.info("Backup antigo removido pela rotação de %d dias: %s", retention_days, fpath)
+                except Exception as e:
+                    logger.warning("Não foi possível remover backup antigo %s: %s", fpath, e)
+            else:
+                seen_dates.add(file_date)
+                kept_count += 1
+
+        return removed_files
 
     def check_and_run_due_auto_backup(
         self, now: Optional[datetime.datetime] = None
@@ -160,7 +339,8 @@ class BackupService:
         """
         Verifica se há um backup automático agendado pendente para execução no momento atual.
         Se estiver no horário/data programados e ainda não tiver sido executado para o ciclo,
-        gera o arquivo .db automaticamente na pasta configurada.
+        gera o arquivo .db automaticamente na pasta configurada e aplica a retenção de 7 dias,
+        substituindo os arquivos da semana anterior.
         Retorna (executou_backup, caminho_do_arquivo).
         """
         settings = self.get_auto_backup_settings()
@@ -172,6 +352,16 @@ class BackupService:
             return False, None
 
         now_dt = now or datetime.datetime.now()
+        retention_days = int(settings.get("retention_days") or self.DEFAULT_RETENTION_DAYS)
+
+        # Mesmo antes do horário, garante limpeza de arquivos vencidos (> 7 dias) se a pasta existir
+        if os.path.isdir(target_dir):
+            self.cleanup_old_backups(
+                target_dir=target_dir,
+                retention_days=retention_days,
+                now=now_dt,
+            )
+
         today_iso = now_dt.strftime("%Y-%m-%d")
         now_ts = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -201,6 +391,14 @@ class BackupService:
         ok, _ = self.create_database_backup(dest_file_path)
         if not ok:
             return False, None
+
+        # Aplica rotação semanal (mantém apenas 7 dias e substitui o da semana anterior)
+        self.cleanup_old_backups(
+            target_dir=target_dir,
+            retention_days=retention_days,
+            now=now_dt,
+            keep_file=dest_file_path,
+        )
 
         try:
             conn = get_connection(self.db_path)
@@ -243,6 +441,19 @@ class BackupService:
             finally:
                 dest_conn.close()
                 source_conn.close()
+
+            # Se for um arquivo gerenciado (backup_diario*.db), aplica a retenção de 7 dias na pasta
+            dest_abs = os.path.abspath(destination_file_path)
+            if self._is_managed_backup_file(os.path.basename(dest_abs)):
+                settings = self.get_auto_backup_settings()
+                retention_days = int(settings.get("retention_days") or self.DEFAULT_RETENTION_DAYS)
+                file_dt = self._extract_backup_datetime(dest_abs)
+                self.cleanup_old_backups(
+                    target_dir=os.path.dirname(dest_abs),
+                    retention_days=retention_days,
+                    now=file_dt,
+                    keep_file=dest_abs,
+                )
 
             return True, f"Backup realizado com sucesso em:\n{destination_file_path}"
         except Exception as e:

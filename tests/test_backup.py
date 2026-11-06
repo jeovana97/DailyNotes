@@ -2,6 +2,7 @@ import unittest
 import tempfile
 import os
 import csv
+import datetime
 from database.migrations import init_db
 from database.connection import get_connection
 from services.authentication_service import AuthenticationService
@@ -78,6 +79,57 @@ class TestBackupService(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["Data"], "27/10/2026")
             self.assertEqual(rows[0]["Usuário"], "admin_backup")
+
+    def test_auto_backup_7_days_retention_and_weekly_replacement(self):
+        backup_dir = os.path.join(self.temp_dir.name, "weekly_backups")
+        ok, _ = self.backup_service.save_auto_backup_settings(
+            enabled=True,
+            target_dir=backup_dir,
+            schedule_date_iso="2026-11-01",
+            schedule_time="18:00",
+            repeat_daily=True,
+            retention_days=7,
+        )
+        self.assertTrue(ok)
+
+        start_dt = datetime.datetime(2026, 11, 1, 18, 5, 0)
+        generated_week1 = []
+
+        # Gera backups para os 7 dias da primeira semana (01/11 a 07/11)
+        for day_offset in range(7):
+            current_dt = start_dt + datetime.timedelta(days=day_offset)
+            ran, path = self.backup_service.check_and_run_due_auto_backup(now=current_dt)
+            self.assertTrue(ran)
+            self.assertIsNotNone(path)
+            self.assertTrue(os.path.isfile(path))
+            generated_week1.append(path)
+
+        managed = self.backup_service.list_managed_backups(backup_dir)
+        self.assertEqual(len(managed), 7)
+
+        # Dia 8 (08/11 - Domingo da próxima semana): deve substituir o backup de 01/11 (7 dias atrás)
+        day8_dt = start_dt + datetime.timedelta(days=7)
+        ran8, path8 = self.backup_service.check_and_run_due_auto_backup(now=day8_dt)
+        self.assertTrue(ran8)
+        self.assertTrue(os.path.isfile(path8))
+        self.assertFalse(os.path.exists(generated_week1[0]))
+
+        managed_after_day8 = self.backup_service.list_managed_backups(backup_dir)
+        self.assertEqual(len(managed_after_day8), 7)
+
+        # Completa a segunda semana inteira (dias 8 a 13 -> 09/11 a 14/11)
+        for day_offset in range(8, 14):
+            current_dt = start_dt + datetime.timedelta(days=day_offset)
+            ran_next, path_next = self.backup_service.check_and_run_due_auto_backup(now=current_dt)
+            self.assertTrue(ran_next)
+            self.assertTrue(os.path.isfile(path_next))
+
+        # Ao final da segunda semana, nenhum arquivo da primeira semana deve existir e apenas 7 arquivos permanecem
+        for old_file in generated_week1:
+            self.assertFalse(os.path.exists(old_file))
+
+        final_managed = self.backup_service.list_managed_backups(backup_dir)
+        self.assertEqual(len(final_managed), 7)
 
 
 if __name__ == "__main__":

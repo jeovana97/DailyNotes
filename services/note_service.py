@@ -410,6 +410,55 @@ class NoteService:
         finally:
             conn.close()
 
+    def get_note_by_title_in_folder(
+        self,
+        user_id: int,
+        title: str,
+        folder_id: Optional[int] = None,
+    ) -> Optional[NoteItem]:
+        """
+        Verifica se já existe uma nota com o mesmo título na pasta especificada (ou na raiz).
+        """
+        clean_title = (title or "").strip()
+        if not clean_title:
+            return None
+
+        norm_title = normalize_text(clean_title)
+        conn = get_connection(self.db_path)
+        try:
+            cursor = conn.cursor()
+            if folder_id is None:
+                cursor.execute(
+                    """
+                    SELECT n.*, NULL AS folder_name
+                    FROM notes n
+                    WHERE n.user_id = ?
+                      AND n.folder_id IS NULL
+                      AND n.title_normalized = ?
+                    ORDER BY n.id DESC
+                    LIMIT 1
+                    """,
+                    (user_id, norm_title),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT n.*, f.name AS folder_name
+                    FROM notes n
+                    LEFT JOIN note_folders f ON n.folder_id = f.id
+                    WHERE n.user_id = ?
+                      AND n.folder_id = ?
+                      AND n.title_normalized = ?
+                    ORDER BY n.id DESC
+                    LIMIT 1
+                    """,
+                    (user_id, folder_id, norm_title),
+                )
+            row = cursor.fetchone()
+            return NoteItem.from_row(row) if row else None
+        finally:
+            conn.close()
+
     def save_note(
         self,
         user_id: int,

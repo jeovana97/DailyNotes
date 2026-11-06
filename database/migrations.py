@@ -43,6 +43,14 @@ def init_db(db_path: Optional[str] = None) -> None:
                     "ALTER TABLE users ADD COLUMN theme_preference TEXT NOT NULL DEFAULT 'dark'"
                 )
 
+            # Migração incremental: garante coluna retention_days em backup_settings
+            cursor = conn.execute("PRAGMA table_info(backup_settings)")
+            bkp_cols = {row["name"] for row in cursor.fetchall()}
+            if "retention_days" not in bkp_cols:
+                conn.execute(
+                    "ALTER TABLE backup_settings ADD COLUMN retention_days INTEGER NOT NULL DEFAULT 7"
+                )
+
             # 2. Criação dos índices
             for statement in CREATE_DIARIES_INDEXES.strip().split(";"):
                 stmt = statement.strip()

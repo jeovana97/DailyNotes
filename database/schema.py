@@ -119,7 +119,11 @@ CREATE TABLE IF NOT EXISTS import_history (
     user_id INTEGER NOT NULL,
     filename TEXT NOT NULL,
     file_path TEXT NOT NULL DEFAULT '',
-    entry_date TEXT NOT NULL,
+    entry_date TEXT NOT NULL DEFAULT '',
+    target_type TEXT NOT NULL DEFAULT 'note',
+    folder_id INTEGER DEFAULT NULL,
+    folder_name TEXT NOT NULL DEFAULT '',
+    note_id INTEGER DEFAULT NULL,
     imported_at TEXT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -134,6 +138,7 @@ CREATE TABLE IF NOT EXISTS backup_settings (
     schedule_date TEXT NOT NULL DEFAULT '', -- YYYY-MM-DD
     schedule_time TEXT NOT NULL DEFAULT '18:00', -- HH:MM
     repeat_daily INTEGER NOT NULL DEFAULT 1, -- 1 = repetir diariamente, 0 = apenas na data
+    retention_days INTEGER NOT NULL DEFAULT 7, -- Dias de retenção (ciclo semanal de 7 dias)
     last_run_at TEXT NOT NULL DEFAULT '',
     last_backup_file TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT ''

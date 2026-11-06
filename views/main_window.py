@@ -24,6 +24,7 @@ from views.import_view import ImportView
 from views.backup_view import BackupView
 from views.users_view import UsersView
 from views.components.dialogs import show_message, ask_confirmation
+from utils.syntax_highlighter import configure_syntax_tags
 
 
 class SelfPasswordChangeDialog(ctk.CTkToplevel):
@@ -131,7 +132,11 @@ class MainWindow(ctk.CTk):
         self.diary_service = DiaryService(db_path=self.db_path)
         self.note_service = NoteService(db_path=self.db_path)
         self.search_service = SearchService(db_path=self.db_path)
-        self.import_service = ImportService(diary_service=self.diary_service, db_path=self.db_path)
+        self.import_service = ImportService(
+            diary_service=self.diary_service,
+            note_service=self.note_service,
+            db_path=self.db_path,
+        )
         self.backup_service = BackupService(db_path=self.db_path)
         self.spell_service = WindowsSpellCheckService(db_path=self.db_path)
 
@@ -383,6 +388,12 @@ class MainWindow(ctk.CTk):
             self.current_user.theme_preference = new_theme
             self.auth_service.update_theme_preference(self.current_user.id, new_theme)
 
+        if self.active_view and hasattr(self.active_view, "txt_content"):
+            try:
+                configure_syntax_tags(self.active_view.txt_content._textbox)
+            except Exception:
+                pass
+
     def _open_change_password_dialog(self):
         SelfPasswordChangeDialog(self, self.current_user.id, self.auth_service)
 
@@ -499,6 +510,9 @@ class MainWindow(ctk.CTk):
                 current_user=self.current_user,
                 note_service=self.note_service,
                 spell_service=self.spell_service,
+                import_service=self.import_service,
+                initial_folder_id=kwargs.get("folder_id"),
+                initial_note_id=kwargs.get("note_id"),
             )
             self.active_view.pack(fill="both", expand=True)
 
@@ -530,8 +544,10 @@ class MainWindow(ctk.CTk):
                 self.content_frame,
                 current_user=self.current_user,
                 import_service=self.import_service,
+                note_service=self.note_service,
                 on_import_completed=self._on_import_finished,
                 on_open_diary_date=self._open_diary_from_search,
+                on_open_imported_note=self._open_note_from_import,
             )
             self.active_view.pack(fill="both", expand=True)
 
@@ -564,6 +580,9 @@ class MainWindow(ctk.CTk):
 
     def _open_diary_from_history(self, date_iso: str, user_id: Optional[int] = None):
         self.navigate_to("diary", date_iso=date_iso, user_id=user_id)
+
+    def _open_note_from_import(self, folder_id: Optional[int] = None, note_id: Optional[int] = None):
+        self.navigate_to("notes", folder_id=folder_id, note_id=note_id)
 
     def _on_import_finished(self):
         # Callback opcional após importação

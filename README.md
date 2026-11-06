@@ -12,15 +12,20 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **Registro Diário Organizado:** Uma anotação centralizada para cada data do calendário por usuário, evitando arquivos duplicados.
 - **Navegação Rápida:** Botões **◀ Anterior**, **📅 Hoje** e **Próximo ▶** para alternar rapidamente entre os dias.
 - **Salvamento Manual e Automático:** Botão **💾 Salvar (Ctrl+S)** e chave de **Salvamento Automático** após segundos de inatividade, com indicador de status em tempo real (`🟢 Salvo`, `⚪ Alterações não salvas *`).
+- **Formatação de Texto (MAIÚSCULO, minúsculo, XML e SQL com Cores):**
+  - **🔠 MAIÚSCULO** e **🔡 minúsculo:** Selecione qualquer trecho no texto (ou no título da nota) e converta instantaneamente para letras maiúsculas ou minúsculas.
+  - **</> XML (Cor)** e **🗄️ SQL (Cor):** Formata (indenta tags XML ou padroniza cláusulas/comandos SQL) e aplica **destaque de sintaxe colorido** (tags, atributos, valores, comandos `SELECT`, `FROM`, `WHERE`, `JOIN`, funções, strings e comentários).
 - **Colagem Inteligente:** Ao colar qualquer texto (`Ctrl+V` ou menu do botão direito **📄 Colar**), o cursor é posicionado automaticamente no final do texto e a tela rola para exibir a última informação colada.
 - **Corretor Ortográfico Nativo do Windows (pt-BR):**
   - Sublinha em vermelho palavras não reconhecidas em tempo real.
   - Ao clicar com o **botão direito** sobre uma palavra sublinhada, exibe sugestões de correção imediatas do Windows, opção de **➕ Adicionar ao Dicionário** ou **👁️ Ignorar**.
 
 ### 2. 🗂️ Notas & Pastas (Notas sem Vínculo com Datas)
-- **Organização Livre por Assunto:** Ideal para guardar scripts SQL, senhas, leiautes, procedimentos, links úteis e anotações de referência permanente.
+- **Organização Livre por Assunto:** Ideal para guardar scripts SQL, senhas, leiautes XML, procedimentos, links úteis e anotações de referência permanente.
 - **Pastas e Subpastas Ilimitadas:** Crie pastas principais e subpastas aninhadas, renomeie ou exclua pastas facilmente.
-- **Mover Nota de Pasta:** Mova qualquer nota entre pastas pelo seletor no topo do editor, pelo botão **📂 Mover de Pasta** ou pelo menu de opções (`⋯` / clique direito na nota).
+- **Formatação Colorida XML/SQL e Conversão de Caixa:** Barra de ferramentas integrada com botões **🔠 MAIÚSCULO**, **🔡 minúsculo**, **</> XML (Cor)**, **🗄️ SQL (Cor)** e **🎨 Limpar Cor**, além de detecção automática de cores ao abrir notas com XML ou SQL.
+- **Importação Direta para Pastas:** Botão **📥 Importar TXT** para importar arquivos `.txt` com qualquer nome (sem precisar de formato de data), perguntando em qual pasta deseja colocar a nota ou permitindo criar uma nova pasta na hora.
+- **Mover Nota de Pasta:** Mova qualquer nota entre pastas pelo seletor no topo do editor, pelo botão **📂 Mover** ou pelo menu de opções (`⋯` / clique direito na nota).
 - **Pesquisa Exclusiva por Nome da Nota:** Possui barra de busca própria no topo da árvore lateral que filtra instantaneamente pelo título da nota (mantendo essas notas isoladas da Pesquisa Avançada do Diário).
 
 ### 3. 🔍 Pesquisa Avançada no Diário
@@ -36,10 +41,11 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **Navegação Direta por Data:** Clique no cabeçalho do mês/ano no calendário para digitar qualquer data (`DD/MM/AAAA`, `MM/AAAA` ou ano) e ir diretamente ao período desejado.
 - **Leitura Protegida:** Clicar em **📖 Abrir** em qualquer dia listado abre a janela dedicada em modo **🔒 Somente Leitura**, contando com o botão **✏️ Editar Nota** caso queira editar sem perder a navegação do calendário.
 
-### 5. 📥 Importar TXT
-- **Importação Individual ou de Pasta Inteira:** Importa arquivos `.txt` no padrão `DD MM AAAA.txt` (ex: `05 11 2026.txt`), detectando automaticamente a codificação (`UTF-8`, `ANSI/Windows-1252`, `ISO-8859-1`).
-- **Tratamento de Conflitos:** Escolha entre **Ignorar**, **Substituir** ou **Mesclar (Anexar)** caso a data já possua anotação.
-- **Histórico do Último TXT Importado:** Exibe no topo da tela um card destacando o **📄 Último TXT Importado** (nome do arquivo, data de destino no diário e data/hora da importação), com botão rápido para abrir a anotação.
+### 5. 📥 Importar TXT (Direto para Pastas)
+- **Sem Necessidade de Formato de Data:** Importa um ou vários arquivos `.txt` (ou uma pasta inteira do computador) com **qualquer nome de arquivo**, usando o nome do arquivo como título da nota e detectando automaticamente a codificação (`UTF-8`, `ANSI/Windows-1252`, `ISO-8859-1`).
+- **Escolha ou Criação de Pasta na Hora:** Ao iniciar a importação, o sistema pergunta em qual pasta deseja colocar a(s) nota(s) ou permite **criar uma nova pasta/subpasta** imediatamente na mesma janela.
+- **Tratamento de Conflitos:** Escolha entre **Ignorar**, **Substituir** ou **Mesclar (Anexar)** caso já exista uma nota com o mesmo nome na pasta escolhida.
+- **Histórico do Último TXT Importado:** Exibe no topo da tela um card destacando o **📄 Último TXT Importado** (nome do arquivo, pasta de destino e data/hora da importação), com botão rápido **🗂️ Abrir em Notas & Pastas**.
 
 ### 6. 💾 Exportar, Backup Automático e Dicionário Ortográfico
 - **🔤 Dicionário do Corretor Ortográfico:**

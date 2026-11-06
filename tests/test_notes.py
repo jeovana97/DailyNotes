@@ -165,6 +165,23 @@ class TestNotesAndFolders(unittest.TestCase):
         )
         self.assertIsNone(moved_to_root.folder_id)
 
+    def test_xml_and_sql_formatting(self):
+        from utils.syntax_highlighter import format_xml_string, format_sql_string
+
+        raw_xml = '<nfeProc versao="4.00"><NFe><infNFe Id="NFe123"><ide><cUF>35</cUF></ide></infNFe></NFe></nfeProc>'
+        formatted_xml = format_xml_string(raw_xml)
+        self.assertIn("  <NFe>", formatted_xml)
+        self.assertIn("    <infNFe Id=\"NFe123\">", formatted_xml)
+        self.assertIn("        <cUF>35</cUF>", formatted_xml)
+
+        raw_sql = "select id, nome, count(*) from clientes where status = 'ativo' and valor >= 100 group by id, nome order by nome asc;"
+        formatted_sql = format_sql_string(raw_sql)
+        self.assertIn("SELECT id, nome, COUNT(*)", formatted_sql)
+        self.assertIn("FROM clientes", formatted_sql)
+        self.assertIn("WHERE status = 'ativo' AND valor >= 100", formatted_sql)
+        self.assertIn("GROUP BY id, nome", formatted_sql)
+        self.assertIn("ORDER BY nome ASC;", formatted_sql)
+
 
 if __name__ == "__main__":
     unittest.main()

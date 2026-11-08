@@ -14,6 +14,7 @@ from services.search_service import SearchService
 from services.import_service import ImportService
 from services.backup_service import BackupService
 from services.spellcheck_service import WindowsSpellCheckService
+from services.update_service import UpdateService
 
 from views.login_view import LoginView
 from views.diary_view import DiaryView
@@ -24,6 +25,7 @@ from views.import_view import ImportView
 from views.backup_view import BackupView
 from views.users_view import UsersView
 from views.components.dialogs import show_message, ask_confirmation
+from views.components.update_dialog import UpdateAvailableDialog
 from utils.syntax_highlighter import configure_syntax_tags
 
 
@@ -139,17 +141,21 @@ class MainWindow(ctk.CTk):
         )
         self.backup_service = BackupService(db_path=self.db_path)
         self.spell_service = WindowsSpellCheckService(db_path=self.db_path)
+        self.update_service = UpdateService(current_version=config.APP_VERSION)
 
         self.current_user: Optional[User] = None
         self.active_view = None
         self.nav_buttons = {}
         self._auto_backup_timer_id = None
+        self._update_checked = False
 
         # Intercepta evento de fechar janela
         self.protocol("WM_DELETE_WINDOW", self._on_close_window)
 
         self._show_login_screen()
         self._schedule_auto_backup_check(delay_ms=4000)
+        # Verifica atualizações silenciosamente em segundo plano após 2.5 segundos
+        self.after(2500, self._start_background_update_check)
 
     def _apply_window_icon(self):
         """Aplica o ícone personalizado do aplicativo na barra de título e barra de tarefas do Windows."""
@@ -364,7 +370,21 @@ class MainWindow(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color=config.COLORS["text_muted"],
         )
-        lbl_ver.pack(anchor="w")
+        lbl_ver.pack(anchor="w", pady=(0, 4))
+
+        self.btn_check_updates = ctk.CTkButton(
+            self.sidebar_footer,
+            text="🔄 Verificar Atualização",
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            hover_color=config.COLORS["card_dark_alt"],
+            text_color=config.COLORS["text_muted"],
+            anchor="w",
+            command=lambda: self._check_updates_manually(),
+        )
+        self.btn_check_updates.pack(fill="x")
 
         # 2. Container de Conteúdo Principal
         self.content_frame = ctk.CTkFrame(
@@ -433,6 +453,67 @@ class MainWindow(ctk.CTk):
                 except Exception:
                     pass
             self._auto_backup_timer_id = self.after(delay_ms, self._run_auto_backup_check)
+        except Exception:
+            pass
+
+    def _start_background_update_check(self):
+        """Dispara verificação de versão em segundo plano sem bloquear a inicialização."""
+        if self._update_checked:
+            return
+        import threading
+        t = threading.Thread(target=self._run_background_update_check, daemon=True)
+        t.start()
+
+    def _run_background_update_check(self):
+        try:
+            res = self.update_service.check_for_updates(timeout_sec=5)
+            self._update_checked = True
+            if res.get("has_update"):
+                self.after(0, lambda: self._prompt_update_dialog(res))
+        except Exception:
+            pass
+
+    def _check_updates_manually(self):
+        """Acionado manualmente pelo usuário no rodapé da barra lateral."""
+        if hasattr(self, "btn_check_updates"):
+            self.btn_check_updates.configure(text="🔄 Verificando...", state="disabled")
+        import threading
+
+        def _worker():
+            res = self.update_service.check_for_updates(timeout_sec=8)
+
+            def _on_finish():
+                if hasattr(self, "btn_check_updates"):
+                    self.btn_check_updates.configure(
+                        text="🔄 Verificar Atualização", state="normal"
+                    )
+                if res.get("has_update"):
+                    self._prompt_update_dialog(res)
+                elif res.get("error"):
+                    show_message(
+                        self,
+                        "Verificação de Atualizações",
+                        f"Não foi possível verificar no momento:\n{res['error']}",
+                        kind="info",
+                    )
+                else:
+                    show_message(
+                        self,
+                        "DailyNotes Atualizado",
+                        f"Você já está utilizando a versão mais recente ({config.APP_VERSION})!",
+                        kind="success",
+                    )
+
+            self.after(0, _on_finish)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _prompt_update_dialog(self, update_info: dict):
+        """Abre o diálogo de nova versão se a janela ainda existir."""
+        try:
+            if not self.winfo_exists():
+                return
+            UpdateAvailableDialog(self, update_info, self.update_service)
         except Exception:
             pass
 

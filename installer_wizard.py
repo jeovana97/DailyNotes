@@ -14,10 +14,14 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_NAME = "Diário de Anotações Inteligente"
-APP_SHORT_NAME = "Diário de Anotações"
-APP_VERSION = "1.0.0"
-APP_PUBLISHER = "DAILYNotes"
+try:
+    from version import APP_NAME, APP_SHORT_NAME, APP_VERSION, APP_AUTHOR as APP_PUBLISHER
+except ImportError:
+    APP_NAME = "Diário de Anotações Inteligente"
+    APP_SHORT_NAME = "Diário de Anotações"
+    APP_VERSION = "1.1.0"
+    APP_PUBLISHER = "DAILYNotes"
+
 EXE_FILENAME = "DiarioAnotacoes.exe"
 
 

@@ -5,9 +5,16 @@ import os
 import sys
 
 # Informações da Aplicação
-APP_NAME = "Diário de Anotações Inteligente"
-APP_VERSION = "1.0.0"
-APP_AUTHOR = "DAILYNotes"
+try:
+    from version import APP_NAME, APP_VERSION, APP_AUTHOR, GITHUB_REPO_OWNER, GITHUB_REPO_NAME, GITHUB_API_LATEST_RELEASE, GITHUB_RELEASES_URL
+except ImportError:
+    APP_NAME = "Diário de Anotações Inteligente"
+    APP_VERSION = "1.1.0"
+    APP_AUTHOR = "DAILYNotes"
+    GITHUB_REPO_OWNER = "jeovana97"
+    GITHUB_REPO_NAME = "DailyNotes"
+    GITHUB_API_LATEST_RELEASE = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/releases/latest"
+    GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/releases"
 
 # Diretório base da aplicação (suporta execução normal e congelada por PyInstaller)
 if getattr(sys, "frozen", False):

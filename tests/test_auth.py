@@ -118,5 +118,29 @@ class TestAuthenticationService(unittest.TestCase):
         self.assertEqual(relogged_dark.theme_preference, "dark")
 
 
+    def test_register_user_self_service(self):
+        # Auto-cadastro de novo usuário (pelo botão da tela de Login)
+        user, msg = self.auth_service.register_user(
+            username="maria",
+            full_name="Maria Souza",
+            password="mariaPass123",
+        )
+        self.assertIsNotNone(user)
+        self.assertEqual(user.username, "maria")
+        self.assertEqual(user.full_name, "Maria Souza")
+        self.assertEqual(user.role, "user")
+        self.assertFalse(user.is_admin)
+        self.assertTrue(user.is_active)
+
+        # Autentica com as credenciais cadastradas
+        auth_user, auth_msg = self.auth_service.authenticate("maria", "mariaPass123")
+        self.assertIsNotNone(auth_user)
+
+        # Tentativa de cadastrar o mesmo username novamente (deve falhar)
+        dup, dup_msg = self.auth_service.register_user("maria", "Maria Duplicada", "outraSenha")
+        self.assertIsNone(dup)
+        self.assertIn("já está em uso", dup_msg)
+
+
 if __name__ == "__main__":
     unittest.main()

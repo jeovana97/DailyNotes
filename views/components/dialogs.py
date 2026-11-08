@@ -5,6 +5,7 @@ from typing import Optional, Callable, Tuple
 import config
 from services.diary_service import DiaryService
 from utils.date_utils import format_date_br, format_date_long_br
+from views.components.responsive_toolbar import ResponsiveToolbar
 from utils.syntax_highlighter import (
     convert_selection_case,
     format_and_highlight_xml,
@@ -455,78 +456,93 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         )
         self.text_card.pack(fill="both", expand=True, padx=18, pady=(0, 8))
 
-        # Barra de formatação rápida (exibida ao editar ou para colorir XML/SQL)
-        self.format_bar = ctk.CTkFrame(
+        # Barra de formatação rápida responsiva com suporte a overflow '»'
+        self.responsive_format_bar = ResponsiveToolbar(
             self.text_card,
             height=34,
-            corner_radius=8,
             fg_color=config.COLORS["card_dark_alt"],
+            corner_radius=8,
+            item_spacing=3,
         )
-        self.format_bar.pack(fill="x", padx=12, pady=(10, 0))
+        self.responsive_format_bar.pack(fill="x", padx=12, pady=(8, 0))
 
-        self.lbl_fmt = ctk.CTkLabel(
-            self.format_bar,
-            text="✨ Formatar:",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_muted"],
-        )
-        self.lbl_fmt.pack(side="left", padx=(10, 6), pady=4)
-
-        self.btn_uppercase = ctk.CTkButton(
-            self.format_bar,
-            text="🔠 MAIÚSCULO",
-            width=105,
+        self.btn_undo = self.responsive_format_bar.add_button(
+            key="undo",
+            symbol_text="↩️",
+            full_label="↩️ Desfazer (Ctrl+Z)",
+            command=self._on_undo,
+            width=36,
             height=26,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color=config.COLORS["primary"],
-            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_redo = self.responsive_format_bar.add_button(
+            key="redo",
+            symbol_text="↪️",
+            full_label="↪️ Refazer (Ctrl+Y)",
+            command=self._on_redo,
+            width=36,
+            height=26,
+        )
+
+        self.btn_cut = self.responsive_format_bar.add_button(
+            key="cut",
+            symbol_text="✂️",
+            full_label="✂️ Recortar Seleção (Ctrl+X)",
+            command=self._on_cut,
+            width=36,
+            height=26,
+        )
+
+        self.btn_print_fmt = self.responsive_format_bar.add_button(
+            key="print_fmt",
+            symbol_text="🖨️",
+            full_label="🖨️ Imprimir Anotação",
+            command=self._on_print,
+            width=36,
+            height=26,
+        )
+
+        self.responsive_format_bar.add_separator(key="sep1", width=10)
+
+        self.btn_uppercase = self.responsive_format_bar.add_button(
+            key="uppercase",
+            symbol_text="🔠",
+            full_label="🔠 Converter para MAIÚSCULO",
             command=self._on_uppercase,
-        )
-        self.btn_uppercase.pack(side="left", padx=3, pady=4)
-
-        self.btn_lowercase = ctk.CTkButton(
-            self.format_bar,
-            text="🔡 minúsculo",
-            width=105,
+            width=36,
             height=26,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color=config.COLORS["primary"],
-            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_lowercase = self.responsive_format_bar.add_button(
+            key="lowercase",
+            symbol_text="🔡",
+            full_label="🔡 Converter para minúsculo",
             command=self._on_lowercase,
-        )
-        self.btn_lowercase.pack(side="left", padx=3, pady=4)
-
-        self.btn_xml = ctk.CTkButton(
-            self.format_bar,
-            text="</> XML (Cor)",
-            width=105,
+            width=36,
             height=26,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color="#0284C7",
-            text_color=config.COLORS["button_text"],
+        )
+
+        self.responsive_format_bar.add_separator(key="sep2", width=10)
+
+        self.btn_xml = self.responsive_format_bar.add_button(
+            key="xml",
+            symbol_text="</>",
+            full_label="</> Formatar e Colorir XML",
             command=self._on_format_xml,
-        )
-        self.btn_xml.pack(side="left", padx=3, pady=4)
-
-        self.btn_sql = ctk.CTkButton(
-            self.format_bar,
-            text="🗄️ SQL (Cor)",
-            width=105,
+            width=42,
             height=26,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color="#BE185D",
-            text_color=config.COLORS["button_text"],
-            command=self._on_format_sql,
+            hover_color="#0284C7",
         )
-        self.btn_sql.pack(side="left", padx=3, pady=4)
+
+        self.btn_sql = self.responsive_format_bar.add_button(
+            key="sql",
+            symbol_text="SQL",
+            full_label="🗄️ Formatar e Colorir SQL",
+            command=self._on_format_sql,
+            width=42,
+            height=26,
+            hover_color="#BE185D",
+        )
 
         self.txt_content = ctk.CTkTextbox(
             self.text_card,
@@ -612,8 +628,62 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
 
     def _update_format_buttons_state(self):
         case_state = "normal" if self.is_editing else "disabled"
-        self.btn_uppercase.configure(state=case_state)
-        self.btn_lowercase.configure(state=case_state)
+        if hasattr(self, "btn_uppercase"):
+            self.btn_uppercase.configure(state=case_state)
+        if hasattr(self, "btn_lowercase"):
+            self.btn_lowercase.configure(state=case_state)
+        if hasattr(self, "btn_undo"):
+            self.btn_undo.configure(state=case_state)
+        if hasattr(self, "btn_redo"):
+            self.btn_redo.configure(state=case_state)
+        if hasattr(self, "btn_cut"):
+            self.btn_cut.configure(state=case_state)
+
+    def _on_undo(self):
+        if not self.is_editing:
+            return
+        try:
+            self.txt_content.edit_undo()
+            self._on_text_modified()
+        except Exception:
+            pass
+
+    def _on_redo(self):
+        if not self.is_editing:
+            return
+        try:
+            self.txt_content.edit_redo()
+            self._on_text_modified()
+        except Exception:
+            pass
+
+    def _on_cut(self):
+        if not self.is_editing:
+            return
+        try:
+            self.txt_content._textbox.event_generate("<<Cut>>")
+            self._on_text_modified()
+        except Exception:
+            pass
+
+    def _on_print(self):
+        content = self.txt_content.get("1.0", "end-1c")
+        if not content.strip():
+            show_message(self, "Imprimir", "Não há conteúdo para imprimir.", kind="warning")
+            return
+        try:
+            import tempfile
+            import subprocess
+            temp_file = os.path.join(tempfile.gettempdir(), f"nota_{self.date_br.replace('/', '_')}.txt")
+            header = f"DIÁRIO DE ANOTAÇÕES - {self.date_br}\n" + ("=" * 50) + "\n\n"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                f.write(header + content)
+            if os.name == "nt":
+                os.startfile(temp_file, "open")
+            else:
+                subprocess.Popen(["xdg-open", temp_file])
+        except Exception as e:
+            show_message(self, "Imprimir", f"Não foi possível abrir o arquivo para impressão:\n{e}", kind="warning")
 
     def _on_uppercase(self):
         if not self.is_editing:

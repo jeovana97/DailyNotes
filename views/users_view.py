@@ -13,8 +13,13 @@ class UserModalDialog(ctk.CTkToplevel):
     def __init__(self, parent, title: str, user: Optional[User] = None):
         super().__init__(parent)
         self.title(title)
-        self.geometry("450x480")
-        self.resizable(False, False)
+        
+        # Dimensões adequadas para acomodar todos os campos e a barra de botões
+        win_w = 480
+        win_h = 570 if user is None else 500
+        self.geometry(f"{win_w}x{win_h}")
+        self.minsize(440, 460)
+        self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
 
@@ -22,22 +27,57 @@ class UserModalDialog(ctk.CTkToplevel):
         self.result = None
 
         self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width() // 2) - 225
-        py = parent.winfo_y() + (parent.winfo_height() // 2) - 240
+        px = parent.winfo_x() + (parent.winfo_width() // 2) - (win_w // 2)
+        py = parent.winfo_y() + (parent.winfo_height() // 2) - (win_h // 2)
         self.geometry(f"+{max(50, px)}+{max(50, py)}")
 
-        self.container = ctk.CTkFrame(
+        # 1. Barra inferior FIXA para os botões de ação (GARANTIDA visibilidade sempre)
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_frame.pack(side="bottom", fill="x", padx=20, pady=(8, 14))
+
+        btn_save_text = "💾 Salvar Novo Usuário" if not user else "💾 Salvar Alterações"
+        self.btn_save = ctk.CTkButton(
+            self.btn_frame,
+            text=btn_save_text,
+            width=180,
+            height=38,
+            corner_radius=8,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=config.COLORS["success"],
+            hover_color=config.COLORS["success_hover"],
+            text_color="#FFFFFF",
+            command=self._on_save,
+        )
+        self.btn_save.pack(side="left")
+
+        self.btn_cancel = ctk.CTkButton(
+            self.btn_frame,
+            text="Cancelar",
+            width=100,
+            height=38,
+            corner_radius=8,
+            font=ctk.CTkFont(size=13),
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+            command=self.destroy,
+        )
+        self.btn_cancel.pack(side="right")
+
+        # 2. Container com rolagem para os campos do formulário (evita cortes em qualquer resolução/DPI)
+        self.container = ctk.CTkScrollableFrame(
             self,
             corner_radius=12,
             fg_color=config.COLORS["card_dark"],
             border_width=1,
             border_color=config.COLORS["border_dark"],
         )
-        self.container.pack(fill="both", expand=True, padx=15, pady=15)
+        self.container.pack(side="top", fill="both", expand=True, padx=15, pady=(15, 6))
 
+        header_title = "👤 Novo Cadastro de Usuário" if not user else f"✏️ Editar Usuário: {user.username}"
         self.lbl_title = ctk.CTkLabel(
             self.container,
-            text=title,
+            text=header_title,
             font=ctk.CTkFont(size=16, weight="bold"),
             text_color=config.COLORS["text_dark"],
         )
@@ -54,6 +94,7 @@ class UserModalDialog(ctk.CTkToplevel):
         self.lbl_name.pack(fill="x", padx=25, pady=(0, 2))
         self.entry_name = ctk.CTkEntry(self.container, height=36, corner_radius=6)
         self.entry_name.pack(fill="x", padx=25, pady=(0, 10))
+        self.entry_name.bind("<Return>", lambda e: self._on_save())
         if user:
             self.entry_name.insert(0, user.full_name)
 
@@ -68,6 +109,7 @@ class UserModalDialog(ctk.CTkToplevel):
         self.lbl_user.pack(fill="x", padx=25, pady=(0, 2))
         self.entry_username = ctk.CTkEntry(self.container, height=36, corner_radius=6)
         self.entry_username.pack(fill="x", padx=25, pady=(0, 10))
+        self.entry_username.bind("<Return>", lambda e: self._on_save())
         if user:
             self.entry_username.insert(0, user.username)
             self.entry_username.configure(state="disabled")
@@ -84,6 +126,7 @@ class UserModalDialog(ctk.CTkToplevel):
             self.lbl_pass.pack(fill="x", padx=25, pady=(0, 2))
             self.entry_password = ctk.CTkEntry(self.container, height=36, show="•", corner_radius=6)
             self.entry_password.pack(fill="x", padx=25, pady=(0, 10))
+            self.entry_password.bind("<Return>", lambda e: self._on_save())
 
         # Perfil (Admin vs Usuário comum)
         self.lbl_role = ctk.CTkLabel(
@@ -130,36 +173,6 @@ class UserModalDialog(ctk.CTkToplevel):
 
         self._on_role_changed(self.combo_role.get())
 
-        # Botões
-        self.btn_frame = ctk.CTkFrame(self.container, fg_color="transparent")
-        self.btn_frame.pack(side="bottom", fill="x", padx=25, pady=(0, 15))
-
-        self.btn_save = ctk.CTkButton(
-            self.btn_frame,
-            text="Salvar",
-            width=120,
-            height=36,
-            corner_radius=8,
-            fg_color=config.COLORS["primary"],
-            hover_color=config.COLORS["primary_hover"],
-            text_color="#FFFFFF",
-            command=self._on_save,
-        )
-        self.btn_save.pack(side="left")
-
-        self.btn_cancel = ctk.CTkButton(
-            self.btn_frame,
-            text="Cancelar",
-            width=100,
-            height=36,
-            corner_radius=8,
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self.destroy,
-        )
-        self.btn_cancel.pack(side="right")
-
         self.wait_window(self)
 
     def _on_role_changed(self, choice: str):
@@ -179,13 +192,21 @@ class UserModalDialog(ctk.CTkToplevel):
 
         if not name:
             show_message(self, "Aviso", "O nome completo não pode estar em branco.", kind="warning")
+            self.entry_name.focus_set()
             return
 
         if not self.user:
+            if not username:
+                show_message(self, "Aviso", "O nome de usuário (login) não pode estar em branco.", kind="warning")
+                self.entry_username.focus_set()
+                return
+
             password = self.entry_password.get()
             if len(password) < 4:
                 show_message(self, "Aviso", "A senha deve conter no mínimo 4 caracteres.", kind="warning")
+                self.entry_password.focus_set()
                 return
+
             self.result = {
                 "name": name,
                 "username": username,
@@ -246,6 +267,7 @@ class ResetPasswordDialog(ctk.CTkToplevel):
             corner_radius=6,
         )
         self.entry_pass.pack(fill="x", padx=20, pady=(0, 15))
+        self.entry_pass.bind("<Return>", lambda e: self._on_save())
 
         self.btn_save = ctk.CTkButton(
             self.container,
@@ -427,6 +449,7 @@ class UsersView(ctk.CTkFrame):
                 password=res["password"],
                 role=res["role"],
                 can_view_all_diaries=res["can_view_all"],
+                is_active=res.get("is_active", True),
             )
             if new_u:
                 show_message(self, "Sucesso", msg, kind="success")

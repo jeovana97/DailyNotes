@@ -163,6 +163,7 @@ class AuthenticationService:
         password: str,
         role: str = "user",
         can_view_all_diaries: bool = False,
+        is_active: bool = True,
     ) -> Tuple[Optional[User], str]:
         """
         Cria um novo usuário no sistema. Requer perfil de administrador.
@@ -184,6 +185,7 @@ class AuthenticationService:
         role = "admin" if role == "admin" else "user"
         # Apenas admins podem ter permissão de ver outros diários
         can_view = 1 if (role == "admin" and can_view_all_diaries) else 0
+        active_val = 1 if is_active else 0
 
         conn = get_connection(self.db_path)
         try:
@@ -198,14 +200,59 @@ class AuthenticationService:
             cursor.execute(
                 """
                 INSERT INTO users (username, full_name, password_hash, role, can_view_all_diaries, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (username.strip(), full_name.strip(), pwd_hash, role, can_view, now, now),
+                (username.strip(), full_name.strip(), pwd_hash, role, can_view, active_val, now, now),
             )
             conn.commit()
             user_id = cursor.lastrowid
             cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
             return User.from_row(cursor.fetchone()), "Usuário cadastrado com sucesso!"
+        finally:
+            conn.close()
+
+    def register_user(
+        self,
+        username: str,
+        full_name: str,
+        password: str,
+    ) -> Tuple[Optional[User], str]:
+        """
+        Cadastra um novo usuário no sistema (auto-cadastro pelo botão da tela de Login).
+        Cria o usuário com perfil padrão ('user') e ativo.
+        """
+        valid_u, msg_u = validate_username(username)
+        if not valid_u:
+            return None, msg_u
+
+        valid_p, msg_p = validate_password(password)
+        if not valid_p:
+            return None, msg_p
+
+        if not full_name or not full_name.strip():
+            return None, "O nome completo não pode estar em branco."
+
+        conn = get_connection(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (username.strip(),))
+            if cursor.fetchone():
+                return None, f"O nome de usuário '{username.strip()}' já está em uso."
+
+            now = get_current_timestamp()
+            pwd_hash = hash_password(password)
+
+            cursor.execute(
+                """
+                INSERT INTO users (username, full_name, password_hash, role, can_view_all_diaries, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, 'user', 0, 1, ?, ?)
+                """,
+                (username.strip(), full_name.strip(), pwd_hash, now, now),
+            )
+            conn.commit()
+            user_id = cursor.lastrowid
+            cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            return User.from_row(cursor.fetchone()), "Cadastro realizado com sucesso! Você já pode entrar."
         finally:
             conn.close()
 

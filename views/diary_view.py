@@ -18,6 +18,7 @@ from utils.date_utils import (
     parse_date_input,
 )
 from views.components.dialogs import UnsavedChangesDialog, show_message
+from views.components.responsive_toolbar import ResponsiveToolbar
 from services.spellcheck_service import WindowsSpellCheckService, SpellingError
 from utils.syntax_highlighter import (
     convert_selection_case,
@@ -195,7 +196,7 @@ class DiaryView(ctk.CTkFrame):
             self.combo_users.set(user_options[current_idx] if user_options else "")
             self.combo_users.pack(side="left")
 
-        # 2. Barra de Ações (Botões Principais)
+        # 2. Barra de Ações (Botões Principais com Suporte a Overflow '»')
         self.action_toolbar = ctk.CTkFrame(
             self,
             corner_radius=12,
@@ -205,92 +206,7 @@ class DiaryView(ctk.CTkFrame):
         )
         self.action_toolbar.pack(fill="x", padx=20, pady=(0, 10))
 
-        # Botão Salvar (com destaque)
-        self.btn_save = ctk.CTkButton(
-            self.action_toolbar,
-            text="💾 Salvar (Ctrl+S)",
-            width=140,
-            height=36,
-            corner_radius=8,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=config.COLORS["primary"],
-            hover_color=config.COLORS["primary_hover"],
-            text_color="#FFFFFF",
-            command=self.save_current_entry,
-        )
-        self.btn_save.pack(side="left", padx=(15, 8), pady=10)
-
-        # Botão Nova Anotação
-        self.btn_new = ctk.CTkButton(
-            self.action_toolbar,
-            text="➕ Nova Anotação",
-            width=130,
-            height=36,
-            corner_radius=8,
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self._on_new_note,
-        )
-        self.btn_new.pack(side="left", padx=4, pady=10)
-
-        # Botão Pesquisar
-        self.btn_search = ctk.CTkButton(
-            self.action_toolbar,
-            text="🔍 Pesquisar",
-            width=110,
-            height=36,
-            corner_radius=8,
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self._on_search_clicked,
-        )
-        self.btn_search.pack(side="left", padx=4, pady=10)
-
-        # Botão Importar TXT
-        self.btn_import = ctk.CTkButton(
-            self.action_toolbar,
-            text="📥 Importar TXT",
-            width=120,
-            height=36,
-            corner_radius=8,
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self._on_import_clicked,
-        )
-        self.btn_import.pack(side="left", padx=4, pady=10)
-
-        # Botão Histórico
-        self.btn_history = ctk.CTkButton(
-            self.action_toolbar,
-            text="📅 Histórico",
-            width=110,
-            height=36,
-            corner_radius=8,
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self._on_history_clicked,
-        )
-        self.btn_history.pack(side="left", padx=4, pady=10)
-
-        # Botão Exportar Anotação
-        self.btn_export = ctk.CTkButton(
-            self.action_toolbar,
-            text="📤 Exportar TXT",
-            width=120,
-            height=36,
-            corner_radius=8,
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self._on_export_clicked,
-        )
-        self.btn_export.pack(side="left", padx=4, pady=10)
-
-        # Switch de Salvamento Automático
+        # Switch de Salvamento Automático fixado à direita
         self.switch_autosave = ctk.CTkSwitch(
             self.action_toolbar,
             text="Salvar automaticamente",
@@ -299,7 +215,99 @@ class DiaryView(ctk.CTkFrame):
             text_color=config.COLORS["text_dark"],
             progress_color=config.COLORS["primary"],
         )
-        self.switch_autosave.pack(side="right", padx=15, pady=10)
+        self.switch_autosave.pack(side="right", padx=15, pady=8)
+
+        # Barra responsiva de botões de ação (esquerda)
+        self.responsive_action_bar = ResponsiveToolbar(
+            self.action_toolbar,
+            height=36,
+            item_spacing=4,
+        )
+        self.responsive_action_bar.pack(side="left", fill="x", expand=True, padx=(10, 8), pady=6)
+
+        self.btn_save = self.responsive_action_bar.add_button(
+            key="save",
+            symbol_text="💾 Salvar",
+            full_label="💾 Salvar Anotação (Ctrl+S)",
+            command=self.save_current_entry,
+            width=88,
+            height=32,
+            fg_color=config.COLORS["primary"],
+            hover_color=config.COLORS["primary_hover"],
+            text_color="#FFFFFF",
+        )
+
+        self.btn_new = self.responsive_action_bar.add_button(
+            key="new",
+            symbol_text="➕ Nova",
+            full_label="➕ Nova Anotação em Branco",
+            command=self._on_new_note,
+            width=78,
+            height=32,
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_search = self.responsive_action_bar.add_button(
+            key="search",
+            symbol_text="🔍 Buscar",
+            full_label="🔍 Pesquisa Avançada no Diário",
+            command=self._on_search_clicked,
+            width=82,
+            height=32,
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_import = self.responsive_action_bar.add_button(
+            key="import",
+            symbol_text="📥 Importar",
+            full_label="📥 Importar Anotações de Arquivo TXT",
+            command=self._on_import_clicked,
+            width=90,
+            height=32,
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_history = self.responsive_action_bar.add_button(
+            key="history",
+            symbol_text="📅 Histórico",
+            full_label="📅 Histórico & Calendário",
+            command=self._on_history_clicked,
+            width=90,
+            height=32,
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_export = self.responsive_action_bar.add_button(
+            key="export",
+            symbol_text="📤 Exportar",
+            full_label="📤 Exportar Anotação para TXT",
+            command=self._on_export_clicked,
+            width=88,
+            height=32,
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_print = self.responsive_action_bar.add_button(
+            key="print",
+            symbol_text="🖨️ Imprimir",
+            full_label="🖨️ Imprimir Anotação do Dia",
+            command=self._on_print_clicked,
+            width=88,
+            height=32,
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+        )
 
         # 3. Área de Edição do Diário (Confortável e Ampla)
         self.editor_container = ctk.CTkFrame(
@@ -311,136 +319,103 @@ class DiaryView(ctk.CTkFrame):
         )
         self.editor_container.pack(fill="both", expand=True, padx=20, pady=(0, 10))
 
-        # 3.1 Barra de Formatação de Texto (Desfazer / MAIÚSCULO / minúsculo / XML / SQL)
-        self.format_bar = ctk.CTkFrame(
+        # 3.1 Barra de Formatação de Texto Responsiva (Desfazer, Refazer, Recortar, Imprimir, MAIÚSCULO, minúsculo, XML, SQL)
+        self.responsive_format_bar = ResponsiveToolbar(
             self.editor_container,
-            height=38,
-            corner_radius=8,
+            height=36,
             fg_color=config.COLORS["card_dark_alt"],
+            corner_radius=8,
+            item_spacing=3,
         )
-        self.format_bar.pack(fill="x", padx=12, pady=(10, 0))
+        self.responsive_format_bar.pack(fill="x", padx=12, pady=(8, 0))
 
-        self.btn_undo = ctk.CTkButton(
-            self.format_bar,
-            text="↩️ Desfazer (Ctrl+Z)",
-            width=130,
-            height=28,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color=config.COLORS["primary"],
-            text_color=config.COLORS["button_text"],
+        self.btn_undo = self.responsive_format_bar.add_button(
+            key="undo",
+            symbol_text="↩️",
+            full_label="↩️ Desfazer (Ctrl+Z)",
             command=self._on_undo_clicked,
-        )
-        self.btn_undo.pack(side="left", padx=(8, 3), pady=5)
-
-        self.btn_redo = ctk.CTkButton(
-            self.format_bar,
-            text="↪️ Refazer",
-            width=82,
+            width=36,
             height=28,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12),
-            fg_color=config.COLORS["card_dark"],
-            hover_color=config.COLORS["primary"],
-            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_redo = self.responsive_format_bar.add_button(
+            key="redo",
+            symbol_text="↪️",
+            full_label="↪️ Refazer (Ctrl+Y)",
             command=self._on_redo_clicked,
-        )
-        self.btn_redo.pack(side="left", padx=3, pady=5)
-
-        self.lbl_sep_undo = ctk.CTkLabel(
-            self.format_bar,
-            text="|",
-            font=ctk.CTkFont(size=13),
-            text_color=config.COLORS["border_dark"],
-        )
-        self.lbl_sep_undo.pack(side="left", padx=5, pady=5)
-
-        self.lbl_format_tools = ctk.CTkLabel(
-            self.format_bar,
-            text="✨ Formatar:",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_muted"],
-        )
-        self.lbl_format_tools.pack(side="left", padx=(2, 6), pady=5)
-
-        self.btn_uppercase = ctk.CTkButton(
-            self.format_bar,
-            text="🔠 MAIÚSCULO",
-            width=110,
+            width=36,
             height=28,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color=config.COLORS["primary"],
-            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_cut = self.responsive_format_bar.add_button(
+            key="cut",
+            symbol_text="✂️",
+            full_label="✂️ Recortar Seleção (Ctrl+X)",
+            command=self._on_cut_clicked,
+            width=36,
+            height=28,
+        )
+
+        self.btn_fmt_print = self.responsive_format_bar.add_button(
+            key="print_fmt",
+            symbol_text="🖨️",
+            full_label="🖨️ Imprimir / Visualizar Impressão",
+            command=self._on_print_clicked,
+            width=36,
+            height=28,
+        )
+
+        self.responsive_format_bar.add_separator(key="sep1", width=10)
+
+        self.btn_uppercase = self.responsive_format_bar.add_button(
+            key="uppercase",
+            symbol_text="🔠",
+            full_label="🔠 Converter para MAIÚSCULO",
             command=self._on_uppercase_clicked,
-        )
-        self.btn_uppercase.pack(side="left", padx=3, pady=5)
-
-        self.btn_lowercase = ctk.CTkButton(
-            self.format_bar,
-            text="🔡 minúsculo",
-            width=110,
+            width=36,
             height=28,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color=config.COLORS["primary"],
-            text_color=config.COLORS["button_text"],
+        )
+
+        self.btn_lowercase = self.responsive_format_bar.add_button(
+            key="lowercase",
+            symbol_text="🔡",
+            full_label="🔡 Converter para minúsculo",
             command=self._on_lowercase_clicked,
-        )
-        self.btn_lowercase.pack(side="left", padx=3, pady=5)
-
-        self.lbl_sep_syntax = ctk.CTkLabel(
-            self.format_bar,
-            text="|",
-            font=ctk.CTkFont(size=13),
-            text_color=config.COLORS["border_dark"],
-        )
-        self.lbl_sep_syntax.pack(side="left", padx=6, pady=5)
-
-        self.btn_format_xml = ctk.CTkButton(
-            self.format_bar,
-            text="</> XML (Cor)",
-            width=110,
+            width=36,
             height=28,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color="#0284C7",
-            text_color=config.COLORS["button_text"],
+        )
+
+        self.responsive_format_bar.add_separator(key="sep2", width=10)
+
+        self.btn_format_xml = self.responsive_format_bar.add_button(
+            key="xml",
+            symbol_text="</>",
+            full_label="</> Formatar e Colorir XML",
             command=self._on_format_xml_clicked,
-        )
-        self.btn_format_xml.pack(side="left", padx=3, pady=5)
-
-        self.btn_format_sql = ctk.CTkButton(
-            self.format_bar,
-            text="🗄️ SQL (Cor)",
-            width=110,
+            width=42,
             height=28,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=config.COLORS["card_dark"],
-            hover_color="#BE185D",
-            text_color=config.COLORS["button_text"],
+            hover_color="#0284C7",
+        )
+
+        self.btn_format_sql = self.responsive_format_bar.add_button(
+            key="sql",
+            symbol_text="SQL",
+            full_label="🗄️ Formatar e Colorir SQL",
             command=self._on_format_sql_clicked,
-        )
-        self.btn_format_sql.pack(side="left", padx=3, pady=5)
-
-        self.btn_clear_colors = ctk.CTkButton(
-            self.format_bar,
-            text="🎨 Limpar Cor",
-            width=100,
+            width=42,
             height=28,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11),
-            fg_color="transparent",
-            hover_color=config.COLORS["card_dark"],
-            text_color=config.COLORS["text_muted"],
-            command=self._on_clear_syntax_colors_clicked,
+            hover_color="#BE185D",
         )
-        self.btn_clear_colors.pack(side="left", padx=3, pady=5)
+
+        self.btn_clear_colors = self.responsive_format_bar.add_button(
+            key="clear_colors",
+            symbol_text="🎨",
+            full_label="🎨 Limpar Cores de Sintaxe",
+            command=self._on_clear_syntax_colors_clicked,
+            width=36,
+            height=28,
+            fg_color="transparent",
+        )
 
         self.txt_content = ctk.CTkTextbox(
             self.editor_container,
@@ -1119,6 +1094,40 @@ class DiaryView(ctk.CTkFrame):
             text_widget.see("end-1c")
         except Exception:
             pass
+
+    def _on_cut_clicked(self):
+        """Recorta o texto selecionado e registra no histórico de desfazer."""
+        try:
+            self.txt_content._textbox.event_generate("<<Cut>>")
+            self._on_text_modified()
+        except Exception:
+            pass
+
+    def _on_print_clicked(self):
+        """Gera visualização de impressão e abre para imprimir."""
+        self._print_entry()
+
+    def _print_entry(self):
+        """Salva temporariamente e abre a janela nativa de impressão do Windows."""
+        try:
+            date_br = format_date_br(self.current_date_iso)
+            author = self.target_user.full_name or self.target_user.username
+            content = self.txt_content.get("1.0", "end-1c")
+
+            import tempfile
+            import subprocess
+            temp_file = os.path.join(tempfile.gettempdir(), f"diario_{self.current_date_iso}.txt")
+            header = f"DIÁRIO DE ANOTAÇÕES - {date_br}\nAutor: {author}\n" + ("=" * 50) + "\n\n"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                f.write(header + content)
+
+            if os.name == "nt":
+                # Abre no Notepad para visualização ou impressão direta
+                os.startfile(temp_file, "open")
+            else:
+                subprocess.Popen(["xdg-open", temp_file])
+        except Exception as e:
+            show_message(self, "Imprimir", f"Não foi possível abrir o arquivo para impressão:\n{e}", kind="warning")
 
     def destroy(self):
         """Cancela timers pendentes antes de destruir a view."""

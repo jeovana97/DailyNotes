@@ -172,7 +172,26 @@ class LoginView(ctk.CTkFrame):
             corner_radius=8,
             command=self._handle_login,
         )
-        self.btn_login.pack(fill="x", padx=40, pady=(10, 28))
+        self.btn_login.pack(fill="x", padx=40, pady=(10, 8))
+
+        # Divisor sutil
+        sep_frame = ctk.CTkFrame(self.center_card, height=1, fg_color=config.COLORS["border_dark"])
+        sep_frame.pack(fill="x", padx=40, pady=(8, 12))
+
+        # Botão para Novo Cadastro de Usuário
+        self.btn_register = ctk.CTkButton(
+            self.center_card,
+            text="➕ Criar Novo Cadastro de Usuário",
+            width=380,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["success"],
+            text_color=config.COLORS["button_text"],
+            corner_radius=8,
+            command=self._build_register_ui,
+        )
+        self.btn_register.pack(fill="x", padx=40, pady=(0, 24))
 
         self.entry_username.focus_set()
 
@@ -284,3 +303,125 @@ class LoginView(ctk.CTkFrame):
 
         self.lbl_error.configure(text="")
         self.on_login_success(user)
+
+    def _build_register_ui(self):
+        """Constrói o formulário de novo cadastro de usuário."""
+        for widget in self.center_card.winfo_children():
+            widget.destroy()
+
+        self.lbl_reg_icon = ctk.CTkLabel(self.center_card, text="👤", font=ctk.CTkFont(size=44))
+        self.lbl_reg_icon.pack(pady=(20, 4))
+
+        self.lbl_reg_title = ctk.CTkLabel(
+            self.center_card,
+            text="Novo Cadastro de Usuário",
+            font=ctk.CTkFont(size=19, weight="bold"),
+            text_color=config.COLORS["text_dark"],
+            justify="center",
+        )
+        self.lbl_reg_title.pack(fill="x", padx=40, pady=(0, 2))
+
+        self.lbl_reg_sub = ctk.CTkLabel(
+            self.center_card,
+            text="Preencha os dados abaixo para criar sua conta no DailyNotes",
+            font=ctk.CTkFont(size=12),
+            text_color=config.COLORS["text_muted"],
+            justify="center",
+        )
+        self.lbl_reg_sub.pack(fill="x", padx=40, pady=(0, 14))
+
+        # Nome Completo
+        self.entry_reg_fullname = ctk.CTkEntry(
+            self.center_card, width=380, height=38, placeholder_text="Nome Completo (ex: Maria Souza)", corner_radius=8
+        )
+        self.entry_reg_fullname.pack(fill="x", padx=40, pady=(0, 8))
+
+        # Nome de Usuário (login)
+        self.entry_reg_user = ctk.CTkEntry(
+            self.center_card, width=380, height=38, placeholder_text="Nome de Usuário para Login (ex: maria)", corner_radius=8
+        )
+        self.entry_reg_user.pack(fill="x", padx=40, pady=(0, 8))
+
+        # Senha
+        self.entry_reg_pass = ctk.CTkEntry(
+            self.center_card, width=380, height=38, placeholder_text="Senha (mínimo 4 caracteres)", show="•", corner_radius=8
+        )
+        self.entry_reg_pass.pack(fill="x", padx=40, pady=(0, 8))
+
+        # Confirmação de Senha
+        self.entry_reg_confirm = ctk.CTkEntry(
+            self.center_card, width=380, height=38, placeholder_text="Confirme sua Senha", show="•", corner_radius=8
+        )
+        self.entry_reg_confirm.pack(fill="x", padx=40, pady=(0, 4))
+        self.entry_reg_confirm.bind("<Return>", lambda e: self._handle_register_user())
+
+        # Mensagem de Erro ou Sucesso
+        self.lbl_error = ctk.CTkLabel(
+            self.center_card, text="", font=ctk.CTkFont(size=12, weight="bold"), text_color=config.COLORS["danger"], wraplength=380
+        )
+        self.lbl_error.pack(padx=40, pady=4)
+
+        # Botão Salvar Novo Cadastro
+        self.btn_save_register = ctk.CTkButton(
+            self.center_card,
+            text="💾 Salvar Novo Cadastro",
+            width=380,
+            height=42,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color=config.COLORS["success"],
+            hover_color=config.COLORS["success_hover"],
+            text_color="#FFFFFF",
+            corner_radius=8,
+            command=self._handle_register_user,
+        )
+        self.btn_save_register.pack(fill="x", padx=40, pady=(6, 8))
+
+        # Botão Voltar para Login
+        self.btn_back_login = ctk.CTkButton(
+            self.center_card,
+            text="↩️ Voltar para o Login",
+            width=380,
+            height=36,
+            font=ctk.CTkFont(size=12),
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+            corner_radius=8,
+            command=self._build_login_ui,
+        )
+        self.btn_back_login.pack(fill="x", padx=40, pady=(0, 22))
+
+        self.entry_reg_fullname.focus_set()
+
+    def _handle_register_user(self):
+        full_name = self.entry_reg_fullname.get().strip()
+        username = self.entry_reg_user.get().strip()
+        pwd = self.entry_reg_pass.get()
+        pwd_confirm = self.entry_reg_confirm.get()
+
+        if not full_name:
+            self.lbl_error.configure(text="Informe seu nome completo.", text_color=config.COLORS["danger"])
+            return
+
+        if not username:
+            self.lbl_error.configure(text="Informe um nome de usuário para login.", text_color=config.COLORS["danger"])
+            return
+
+        if pwd != pwd_confirm:
+            self.lbl_error.configure(text="As senhas digitadas não coincidem.", text_color=config.COLORS["danger"])
+            return
+
+        user, msg = self.auth_service.register_user(username, full_name, pwd)
+        if not user:
+            self.lbl_error.configure(text=msg, text_color=config.COLORS["danger"])
+            return
+
+        # Cadastro realizado com sucesso: retorna à tela de login já com o usuário preenchido
+        self._build_login_ui()
+        self.entry_username.delete(0, "end")
+        self.entry_username.insert(0, username)
+        self.entry_password.focus_set()
+        self.lbl_error.configure(
+            text="✅ Usuário cadastrado com sucesso! Digite sua senha para entrar.",
+            text_color=config.COLORS["success"],
+        )

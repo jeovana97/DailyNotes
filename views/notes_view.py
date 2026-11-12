@@ -960,7 +960,7 @@ class NotesView(ctk.CTkFrame):
         self.btn_import_txt = self.responsive_action_bar.add_button(
             key="import",
             symbol_text="📥 Importar",
-            full_label="📥 Importar Notas de Arquivo TXT",
+            full_label="📥 Importar Notas (TXT, XML, BAT, SQL)",
             command=self._on_import_notes_clicked,
             width=88,
             height=32,
@@ -1299,14 +1299,32 @@ class NotesView(ctk.CTkFrame):
                 subtitle_path=folder_path,
             )
 
+    def _expand_folder_and_ancestors(
+        self, folder_id: Optional[int], folders: Optional[List[NoteFolder]] = None
+    ):
+        """Expande uma pasta e todos os seus ancestrais na árvore lateral."""
+        if folder_id is None:
+            return
+        if folders is None:
+            folders = self.note_service.list_folders(self.current_user.id)
+        folder_map = {f.id: f for f in folders if f.id is not None}
+        curr_id: Optional[int] = folder_id
+        visited = set()
+        while curr_id is not None and curr_id in folder_map and curr_id not in visited:
+            visited.add(curr_id)
+            self.expanded_folders.add(curr_id)
+            curr_id = folder_map[curr_id].parent_id
+
     def _render_hierarchy_tree(self, all_notes: List[NoteItem]):
         """Exibe a árvore hierárquica de pastas, subpastas e notas."""
         folders = self.note_service.list_folders(self.current_user.id)
 
-        # Na primeira carga, expande as pastas para facilitar visualização
-        if not self._initial_expansion_done and folders:
-            self.expanded_folders = {f.id for f in folders if f.id is not None}
+        # Na primeira carga, as pastas iniciam minimizadas/fechadas por padrão
+        # (são abertas somente quando o usuário clica na pasta)
+        if not self._initial_expansion_done:
             self._initial_expansion_done = True
+            if self.selected_folder_id is not None and folders:
+                self._expand_folder_and_ancestors(self.selected_folder_id, folders)
 
         children_folders: Dict[Optional[int], List[NoteFolder]] = {}
         for f in folders:
@@ -1579,6 +1597,10 @@ class NotesView(ctk.CTkFrame):
             label=f"📁 Nova Subpasta em '{folder.name}'",
             command=lambda: self._on_new_folder_clicked(parent_folder_id=folder.id),
         )
+        menu.add_command(
+            label=f"📥 Importar Arquivos para '{folder.name}'...",
+            command=lambda: self._on_import_notes_clicked(default_folder_id=folder.id),
+        )
         menu.add_separator()
         menu.add_command(
             label="✏️ Renomear / Mover Pasta",
@@ -1724,14 +1746,7 @@ class NotesView(ctk.CTkFrame):
     def _apply_note_moved(self, moved_note: NoteItem):
         """Atualiza o estado da árvore e do editor após mover uma nota de pasta."""
         if moved_note.folder_id is not None:
-            # Expande a pasta destino e todas as suas pastas ancestrais para exibir a nota movida
-            all_folders = {f.id: f for f in self.note_service.list_folders(self.current_user.id)}
-            curr_id = moved_note.folder_id
-            visited = set()
-            while curr_id is not None and curr_id in all_folders and curr_id not in visited:
-                visited.add(curr_id)
-                self.expanded_folders.add(curr_id)
-                curr_id = all_folders[curr_id].parent_id
+            self._expand_folder_and_ancestors(moved_note.folder_id)
 
         self.selected_folder_id = moved_note.folder_id
 
@@ -1814,13 +1829,7 @@ class NotesView(ctk.CTkFrame):
             self.active_note = fresh_note
             self.selected_folder_id = fresh_note.folder_id
             if fresh_note.folder_id is not None:
-                all_folders = {f.id: f for f in self.note_service.list_folders(self.current_user.id)}
-                curr_id = fresh_note.folder_id
-                visited = set()
-                while curr_id is not None and curr_id in all_folders and curr_id not in visited:
-                    visited.add(curr_id)
-                    self.expanded_folders.add(curr_id)
-                    curr_id = all_folders[curr_id].parent_id
+                self._expand_folder_and_ancestors(fresh_note.folder_id)
 
             self.entry_title.delete(0, "end")
             self.entry_title.insert(0, fresh_note.title)
@@ -2043,10 +2052,16 @@ class NotesView(ctk.CTkFrame):
         safe_name = re.sub(r'[\\/*?:"<>|]', "_", note.title).strip() or "nota"
         file_path = filedialog.asksaveasfilename(
             parent=self,
-            title="Exportar Nota para TXT",
+            title="Exportar Nota para Arquivo",
             initialfile=f"{safe_name}.txt",
             defaultextension=".txt",
-            filetypes=[("Arquivos de Texto", "*.txt")],
+            filetypes=[
+                ("Arquivo de Texto (*.txt)", "*.txt"),
+                ("Arquivo XML (*.xml)", "*.xml"),
+                ("Arquivo Batch (*.bat)", "*.bat"),
+                ("Script SQL (*.sql)", "*.sql"),
+                ("Todos os Arquivos (*.*)", "*.*"),
+            ],
         )
         if file_path:
             path_map = self.note_service.get_folder_path_map(self.current_user.id)
@@ -2057,19 +2072,28 @@ class NotesView(ctk.CTkFrame):
             else:
                 show_message(self, "Erro", msg, kind="danger")
 
-    def _on_import_notes_clicked(self):
+    def _on_import_notes_clicked(self, default_folder_id: Optional[int] = None):
         """
-        Permite selecionar um ou vários arquivos TXT e pergunta em qual pasta
+        Permite selecionar um ou vários arquivos (TXT, XML, BAT, SQL) e pergunta em qual pasta
         deseja colocar a(s) nota(s) ou se precisa criar uma nova pasta.
         Não exige formato de data nos nomes dos arquivos.
         """
         if not self.confirm_discard_if_unsaved():
             return
 
+        supported_types = [
+            ("Formatos Suportados (*.txt;*.xml;*.bat;*.sql)", "*.txt;*.xml;*.bat;*.sql;*.TXT;*.XML;*.BAT;*.SQL"),
+            ("Arquivos de Texto (*.txt)", "*.txt;*.TXT"),
+            ("Arquivos XML (*.xml)", "*.xml;*.XML"),
+            ("Arquivos Batch / BAT (*.bat)", "*.bat;*.BAT"),
+            ("Scripts SQL (*.sql)", "*.sql;*.SQL"),
+            ("Todos os Arquivos (*.*)", "*.*"),
+        ]
+
         file_paths = filedialog.askopenfilenames(
             parent=self,
-            title="Selecione o(s) arquivo(s) TXT para importar como Nota(s)",
-            filetypes=[("Arquivos de Texto", "*.txt"), ("Todos os Arquivos", "*.*")],
+            title="Selecione o(s) arquivo(s) para importar como Nota(s) (TXT, XML, BAT, SQL)",
+            filetypes=supported_types,
         )
         if not file_paths:
             return
@@ -2078,14 +2102,16 @@ class NotesView(ctk.CTkFrame):
         if len(files_list) == 1:
             desc = f"📄 Arquivo selecionado: {os.path.basename(files_list[0])}"
         else:
-            desc = f"📄 {len(files_list)} arquivos TXT selecionados para importação."
+            desc = f"📄 {len(files_list)} arquivos selecionados para importação."
+
+        target_default = default_folder_id if default_folder_id is not None else self.selected_folder_id
 
         diag = SelectImportFolderDialog(
             self,
             note_service=self.note_service,
             user_id=self.current_user.id,
             files_description=desc,
-            default_folder_id=self.selected_folder_id,
+            default_folder_id=target_default,
         )
         if not diag.confirmed:
             return
@@ -2112,7 +2138,7 @@ class NotesView(ctk.CTkFrame):
                 error_count += 1
 
         if target_folder_id is not None:
-            self.expanded_folders.add(target_folder_id)
+            self._expand_folder_and_ancestors(target_folder_id)
         self.selected_folder_id = target_folder_id
         self._refresh_folder_combo(target_folder_id)
         self._refresh_tree()

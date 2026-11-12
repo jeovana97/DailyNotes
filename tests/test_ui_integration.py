@@ -121,6 +121,45 @@ class TestUIIntegration(unittest.TestCase):
         # Destrói app
         app.destroy()
 
+    def test_notes_view_folders_minimized_by_default_and_expand_on_click(self):
+        # Cria estrutura de pastas e notas
+        f_admin = self.auth_service.db_path  # Apenas para ter o path
+        from services.note_service import NoteService
+        note_service = NoteService(db_path=self.db_path)
+        folder_admin = note_service.create_folder(self.admin.id, "Administrativo")
+        folder_scripts = note_service.create_folder(self.admin.id, "Scripts", parent_id=folder_admin.id)
+        note_service.save_note(
+            self.admin.id,
+            title="Nota de Teste Admin",
+            content="Conteudo",
+            folder_id=folder_admin.id,
+        )
+
+        app = MainWindow(db_path=self.db_path)
+        app.update()
+        app._on_login_success(self.admin)
+        app.update()
+
+        # Navega para a tela de notas
+        app.navigate_to("notes")
+        app.update()
+
+        notes_view = app.active_view
+        # As pastas devem vir minimizadas (recolhidas) por padrão
+        self.assertEqual(notes_view.expanded_folders, set())
+
+        # Ao clicar na pasta, ela deve expandir e exibir o conteúdo
+        notes_view._on_folder_row_clicked(folder_admin.id)
+        app.update()
+        self.assertIn(folder_admin.id, notes_view.expanded_folders)
+
+        # Ao clicar novamente, a pasta deve recolher (minimizar)
+        notes_view._on_folder_row_clicked(folder_admin.id)
+        app.update()
+        self.assertNotIn(folder_admin.id, notes_view.expanded_folders)
+
+        app.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

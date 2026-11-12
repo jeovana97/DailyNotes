@@ -6,6 +6,7 @@ import config
 from models.user import User
 from services.authentication_service import AuthenticationService
 from views.components.dialogs import show_message, ask_confirmation
+from utils.window_utils import center_modal_on_parent
 
 
 class UserModalDialog(ctk.CTkToplevel):
@@ -26,10 +27,7 @@ class UserModalDialog(ctk.CTkToplevel):
         self.user = user
         self.result = None
 
-        self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width() // 2) - (win_w // 2)
-        py = parent.winfo_y() + (parent.winfo_height() // 2) - (win_h // 2)
-        self.geometry(f"+{max(50, px)}+{max(50, py)}")
+        center_modal_on_parent(self, parent, win_w, win_h)
 
         # 1. Barra inferior FIXA para os botões de ação (GARANTIDA visibilidade sempre)
         self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -236,11 +234,7 @@ class ResetPasswordDialog(ctk.CTkToplevel):
         self.grab_set()
 
         self.new_password = None
-
-        self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width() // 2) - 190
-        py = parent.winfo_y() + (parent.winfo_height() // 2) - 120
-        self.geometry(f"+{max(50, px)}+{max(50, py)}")
+        center_modal_on_parent(self, parent, 380, 240)
 
         self.container = ctk.CTkFrame(
             self,

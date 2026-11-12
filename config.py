@@ -9,7 +9,7 @@ try:
     from version import APP_NAME, APP_VERSION, APP_AUTHOR, GITHUB_REPO_OWNER, GITHUB_REPO_NAME, GITHUB_API_LATEST_RELEASE, GITHUB_RELEASES_URL
 except ImportError:
     APP_NAME = "Diário de Anotações Inteligente"
-    APP_VERSION = "1.2.0"
+    APP_VERSION = "1.3.0"
     APP_AUTHOR = "DAILYNotes"
     GITHUB_REPO_OWNER = "jeovana97"
     GITHUB_REPO_NAME = "DailyNotes"

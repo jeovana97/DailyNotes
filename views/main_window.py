@@ -15,10 +15,12 @@ from services.import_service import ImportService
 from services.backup_service import BackupService
 from services.spellcheck_service import WindowsSpellCheckService
 from services.update_service import UpdateService
+from services.schedule_service import ScheduleService
 
 from views.login_view import LoginView
 from views.diary_view import DiaryView
 from views.notes_view import NotesView
+from views.schedules_view import SchedulesView
 from views.search_view import SearchView
 from views.history_view import HistoryView
 from views.import_view import ImportView
@@ -27,6 +29,7 @@ from views.users_view import UsersView
 from views.components.dialogs import show_message, ask_confirmation
 from views.components.update_dialog import UpdateAvailableDialog
 from utils.syntax_highlighter import configure_syntax_tags
+from utils.window_utils import center_window_on_primary_screen, get_display_monitors, center_modal_on_parent
 
 
 class SelfPasswordChangeDialog(ctk.CTkToplevel):
@@ -41,11 +44,7 @@ class SelfPasswordChangeDialog(ctk.CTkToplevel):
 
         self.user_id = user_id
         self.auth_service = auth_service
-
-        self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width() // 2) - 190
-        py = parent.winfo_y() + (parent.winfo_height() // 2) - 140
-        self.geometry(f"+{max(50, px)}+{max(50, py)}")
+        center_modal_on_parent(self, parent, 380, 280)
 
         self.container = ctk.CTkFrame(self, corner_radius=12, fg_color=config.COLORS["card_dark"])
         self.container.pack(fill="both", expand=True, padx=15, pady=15)
@@ -122,7 +121,10 @@ class MainWindow(ctk.CTk):
 
         self.title(config.APP_NAME)
         self.minsize(1050, 680)
-        self.geometry("1240x780")
+        self._apply_centered_geometry()
+        # Reaplica após 60ms e 200ms para garantir centralização exata na tela principal após cálculo de DPI
+        self.after(60, self._apply_centered_geometry)
+        self.after(200, self._apply_centered_geometry)
 
         self._icon_photo = None
         self._brand_ctk_image = None
@@ -142,11 +144,13 @@ class MainWindow(ctk.CTk):
         self.backup_service = BackupService(db_path=self.db_path)
         self.spell_service = WindowsSpellCheckService(db_path=self.db_path)
         self.update_service = UpdateService(current_version=config.APP_VERSION)
+        self.schedule_service = ScheduleService(db_path=self.db_path)
 
         self.current_user: Optional[User] = None
         self.active_view = None
         self.nav_buttons = {}
         self._auto_backup_timer_id = None
+        self._reminder_timer_id = None
         self._update_checked = False
 
         # Intercepta evento de fechar janela
@@ -154,8 +158,27 @@ class MainWindow(ctk.CTk):
 
         self._show_login_screen()
         self._schedule_auto_backup_check(delay_ms=4000)
+        self._schedule_reminder_check(delay_ms=3000)
         # Verifica atualizações silenciosamente em segundo plano após 2.5 segundos
         self.after(2500, self._start_background_update_check)
+
+    def _apply_centered_geometry(self):
+        """
+        Centraliza a janela principal na TELA PRINCIPAL (Primary Monitor).
+        Detecta e trata múltiplos monitores de forma que a aplicação nunca abra fora da tela.
+        """
+        try:
+            if not self.winfo_exists():
+                return
+            center_window_on_primary_screen(
+                self,
+                desired_width=1240,
+                desired_height=780,
+                min_width=1050,
+                min_height=680,
+            )
+        except Exception:
+            pass
 
     def _apply_window_icon(self):
         """Aplica o ícone personalizado do aplicativo na barra de título e barra de tarefas do Windows."""
@@ -320,6 +343,7 @@ class MainWindow(ctk.CTk):
         nav_items = [
             ("diary", "📝 Diário do Dia"),
             ("notes", "🗂️ Notas & Pastas"),
+            ("schedules", "⏰ Agendamentos"),
             ("search", "🔍 Pesquisa Avançada"),
             ("history", "📅 Histórico & Calendário"),
             ("import", "📥 Importar TXT"),
@@ -440,7 +464,42 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
             self._auto_backup_timer_id = None
+        if self._reminder_timer_id is not None:
+            try:
+                self.after_cancel(self._reminder_timer_id)
+            except Exception:
+                pass
+            self._reminder_timer_id = None
         self.destroy()
+
+    def _schedule_reminder_check(self, delay_ms: int = 25000):
+        """Agenda verificação periódica de lembretes e agendamentos pendentes."""
+        try:
+            if not self.winfo_exists():
+                return
+            if self._reminder_timer_id is not None:
+                try:
+                    self.after_cancel(self._reminder_timer_id)
+                except Exception:
+                    pass
+            self._reminder_timer_id = self.after(delay_ms, self._run_reminder_check)
+        except Exception:
+            pass
+
+    def _run_reminder_check(self):
+        """Verifica se há agendamentos que atingiram a data/horário e dispara notificações do Windows."""
+        self._reminder_timer_id = None
+        try:
+            if not self.winfo_exists():
+                return
+            if self.current_user:
+                notified = self.schedule_service.check_and_notify_due_schedules(user_id=self.current_user.id)
+                if notified and hasattr(self.active_view, "refresh"):
+                    self.active_view.refresh()
+        except Exception:
+            pass
+        finally:
+            self._schedule_reminder_check(delay_ms=25000)
 
     def _schedule_auto_backup_check(self, delay_ms: int = 15000):
         """Agenda verificação periódica do backup automático agendado."""
@@ -594,6 +653,15 @@ class MainWindow(ctk.CTk):
                 import_service=self.import_service,
                 initial_folder_id=kwargs.get("folder_id"),
                 initial_note_id=kwargs.get("note_id"),
+            )
+            self.active_view.pack(fill="both", expand=True)
+
+        elif view_name == "schedules":
+            self.active_view = SchedulesView(
+                self.content_frame,
+                current_user=self.current_user,
+                schedule_service=self.schedule_service,
+                on_open_diary_date=self._open_diary_from_search,
             )
             self.active_view.pack(fill="both", expand=True)
 

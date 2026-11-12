@@ -144,3 +144,30 @@ CREATE TABLE IF NOT EXISTS backup_settings (
     updated_at TEXT NOT NULL DEFAULT ''
 );
 """
+
+# Tabela para Agendamentos e Lembretes com Notificação do Windows
+CREATE_SCHEDULES_TABLE = """
+CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    title_normalized TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    schedule_date TEXT NOT NULL, -- Formato ISO: YYYY-MM-DD
+    schedule_time TEXT NOT NULL, -- Formato: HH:MM
+    status TEXT NOT NULL DEFAULT 'pendente', -- 'pendente', 'notificado', 'concluido', 'cancelado'
+    priority TEXT NOT NULL DEFAULT 'normal', -- 'baixa', 'normal', 'alta', 'urgente'
+    repeat_interval TEXT NOT NULL DEFAULT 'none', -- 'none', 'daily', 'weekly', 'monthly'
+    notified_at TEXT DEFAULT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+"""
+
+CREATE_SCHEDULES_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_schedules_user_status ON schedules(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_schedules_datetime ON schedules(schedule_date, schedule_time);
+CREATE INDEX IF NOT EXISTS idx_schedules_user_date ON schedules(user_id, schedule_date);
+CREATE INDEX IF NOT EXISTS idx_schedules_title_norm ON schedules(user_id, title_normalized);
+"""

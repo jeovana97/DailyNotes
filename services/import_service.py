@@ -19,6 +19,9 @@ class ConflictResolution(str, Enum):
     MERGE = "merge"        # Mescla o conteúdo, anexando com separador datado
 
 
+SUPPORTED_NOTE_EXTENSIONS: Tuple[str, ...] = (".txt", ".xml", ".bat", ".sql")
+
+
 class ImportService:
     def __init__(
         self,
@@ -323,17 +326,17 @@ class ImportService:
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> Dict[str, Any]:
         """
-        Importa todos os arquivos .txt de um diretório do computador diretamente para a pasta
-        escolhida em 'Notas & Pastas', sem exigir formato de data no nome dos arquivos.
+        Importa todos os arquivos suportados (.txt, .xml, .bat, .sql) de um diretório do computador
+        diretamente para a pasta escolhida em 'Notas & Pastas', sem exigir formato de data no nome dos arquivos.
         """
         if not os.path.isdir(folder_path):
             raise ValueError(f"O caminho informado não é uma pasta válida: {folder_path}")
 
-        txt_files = [
+        note_files = [
             f for f in os.listdir(folder_path)
-            if f.lower().endswith(".txt") and os.path.isfile(os.path.join(folder_path, f))
+            if f.lower().endswith(SUPPORTED_NOTE_EXTENSIONS) and os.path.isfile(os.path.join(folder_path, f))
         ]
-        txt_files.sort(key=lambda fname: fname.lower())
+        note_files.sort(key=lambda fname: fname.lower())
 
         path_map = self.note_service.get_folder_path_map(user_id)
         folder_label = (
@@ -342,14 +345,14 @@ class ImportService:
             else "Raiz (Sem pasta)"
         )
 
-        total_files = len(txt_files)
+        total_files = len(note_files)
         imported_count = 0
         skipped_count = 0
         error_count = 0
         last_note_id: Optional[int] = None
         details: List[Dict[str, Any]] = []
 
-        for idx, filename in enumerate(txt_files, start=1):
+        for idx, filename in enumerate(note_files, start=1):
             file_path = os.path.join(folder_path, filename)
             if progress_callback:
                 progress_callback(idx, total_files, filename)

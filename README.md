@@ -28,7 +28,13 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **Mover Nota de Pasta:** Mova qualquer nota entre pastas pelo seletor no topo do editor, pelo botão **📂 Mover** ou pelo menu de opções (`⋯` / clique direito na nota).
 - **Pesquisa Exclusiva por Nome da Nota:** Possui barra de busca própria no topo da árvore lateral que filtra instantaneamente pelo título da nota (mantendo essas notas isoladas da Pesquisa Avançada do Diário).
 
-### 3. 🔍 Pesquisa Avançada no Diário
+### 3. ⏰ Agendamentos e Lembretes com Notificação do Windows
+- **Cadastro de Notas Agendadas:** Cadastre tarefas, compromissos e lembretes definindo **Assunto**, **Nota/Detalhes**, **Data (DD/MM/AAAA)**, **Horário (HH:MM)**, **Nível de Prioridade** (Baixa, Normal, Alta, Urgente) e **Repetição** (Não repete, Diariamente, Semanalmente, Mensalmente).
+- **Notificação Nativa do Windows (Toast):** Quando o horário agendado é atingido, o DailyNotes emite automaticamente uma notificação nativa na Central de Ações do Windows com aviso sonoro e prévia da nota.
+- **Painel com Filtros Inteligentes:** Alterne facilmente entre abas: **Pendentes**, **Hoje**, **Atrasados**, **Notificados**, **Concluídos** e **Todos**, com barra de busca em tempo real por assunto ou conteúdo.
+- **Ações Rápidas:** Botões para **✔️ Concluir** (ou **↩️ Reabrir**), **✏️ Editar**, **📝 Abrir no Diário** da data e **🔔 Testar Aviso** para verificar as notificações do Windows imediatamente.
+
+### 4. 🔍 Pesquisa Avançada no Diário
 - **Busca Instantânea (FTS5 + Normalização):** Localiza qualquer palavra ou expressão nas anotações do diário, ignorando diferenças entre maiúsculas/minúsculas e acentuação (ex: buscar `sessao` encontra `sessão`).
 - **Filtros Combinados:** Filtre por **Data Inicial**, **Data Final**, **Data Exata**, **Ordenação** (mais recentes ou mais antigas) e **Usuário** (para administradores com permissão).
 - **Janela de Visualização (Somente Leitura) com Opção de Edição:**
@@ -36,18 +42,18 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
   - Caso deseje alterar a anotação, basta clicar no botão **✏️ Editar Nota** na própria janela (habilitando o botão **💾 Salvar Alterações**) ou clicar em **📝 Abrir no Diário do Dia**.
 - **Exportação para Excel (CSV):** Exporte a lista de resultados filtrados para um arquivo `.csv` (UTF-8 com BOM).
 
-### 4. 📅 Histórico & Calendário
+### 5. 📅 Histórico & Calendário
 - **Calendário Mensal Interativo:** Destaca visualmente todos os dias do mês que possuem anotações registradas.
 - **Navegação Direta por Data:** Clique no cabeçalho do mês/ano no calendário para digitar qualquer data (`DD/MM/AAAA`, `MM/AAAA` ou ano) e ir diretamente ao período desejado.
 - **Leitura Protegida:** Clicar em **📖 Abrir** em qualquer dia listado abre a janela dedicada em modo **🔒 Somente Leitura**, contando com o botão **✏️ Editar Nota** caso queira editar sem perder a navegação do calendário.
 
-### 5. 📥 Importar TXT (Direto para Pastas)
+### 6. 📥 Importar TXT (Direto para Pastas)
 - **Sem Necessidade de Formato de Data:** Importa um ou vários arquivos `.txt` (ou uma pasta inteira do computador) com **qualquer nome de arquivo**, usando o nome do arquivo como título da nota e detectando automaticamente a codificação (`UTF-8`, `ANSI/Windows-1252`, `ISO-8859-1`).
 - **Escolha ou Criação de Pasta na Hora:** Ao iniciar a importação, o sistema pergunta em qual pasta deseja colocar a(s) nota(s) ou permite **criar uma nova pasta/subpasta** imediatamente na mesma janela.
 - **Tratamento de Conflitos:** Escolha entre **Ignorar**, **Substituir** ou **Mesclar (Anexar)** caso já exista uma nota com o mesmo nome na pasta escolhida.
 - **Histórico do Último TXT Importado:** Exibe no topo da tela um card destacando o **📄 Último TXT Importado** (nome do arquivo, pasta de destino e data/hora da importação), com botão rápido **🗂️ Abrir em Notas & Pastas**.
 
-### 6. 💾 Exportar, Backup Automático e Dicionário Ortográfico
+### 7. 💾 Exportar, Backup Automático e Dicionário Ortográfico
 - **🔤 Dicionário do Corretor Ortográfico:**
   - Visualize todas as palavras personalizadas adicionadas ao corretor ortográfico.
   - Adicione novas palavras (siglas, termos técnicos, comandos) ou remova palavras cadastradas a qualquer momento.
@@ -59,7 +65,7 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **🔄 Restauração Segura:** Valida o arquivo `.db`/`.bak` selecionado e cria uma cópia preventiva de segurança antes de restaurar.
 - **📂 Exportação em Lote para TXT:** Exporta todas as anotações do diário para uma pasta em arquivos individuais `DD MM AAAA.txt`.
 
-### 7. 🎨 Tema Persistente e Controle de Usuários
+### 8. 🎨 Tema Persistente e Controle de Usuários
 - **Modo Escuro e Modo Claro Persistentes:** A escolha entre **Modo Escuro** e **Modo Claro** no rodapé da barra lateral é salva automaticamente no perfil do usuário e restaurada sempre que ele fizer login novamente.
 - **Gerenciamento de Usuários (Admin):** Cadastro de novos usuários, ativação/desativação de contas, redefinição de senhas (criptografia **Argon2id**) e permissão para visualizar diários de outros usuários.
 

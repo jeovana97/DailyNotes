@@ -19,7 +19,7 @@ try:
 except ImportError:
     APP_NAME = "Diário de Anotações Inteligente"
     APP_SHORT_NAME = "Diário de Anotações"
-    APP_VERSION = "1.2.0"
+    APP_VERSION = "1.3.0"
     APP_PUBLISHER = "DAILYNotes"
 
 EXE_FILENAME = "DiarioAnotacoes.exe"

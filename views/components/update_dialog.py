@@ -14,6 +14,7 @@ import customtkinter as ctk
 
 import config
 from services.update_service import UpdateService
+from utils.window_utils import center_modal_on_parent
 
 
 class UpdateAvailableDialog(ctk.CTkToplevel):
@@ -30,15 +31,11 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
         self.cancel_event = threading.Event()
 
         self.title("Nova Versão Disponível - DailyNotes")
-        self.geometry("520x440")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
 
-        self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width() // 2) - 260
-        py = parent.winfo_y() + (parent.winfo_height() // 2) - 220
-        self.geometry(f"+{max(50, px)}+{max(50, py)}")
+        center_modal_on_parent(self, parent, 520, 440)
 
         self._build_ui()
 

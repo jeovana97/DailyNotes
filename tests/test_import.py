@@ -175,6 +175,58 @@ class TestImportService(unittest.TestCase):
         self.assertEqual(report["errors"], 0)
         self.assertEqual(report["target_folder_name"], "Importadas")
 
+    def test_import_notes_sql_xml_bat_formats(self):
+        folder_dev = self.import_service.note_service.create_folder(self.user.id, "Scripts e Layouts")
+
+        # Cria arquivos nos formatos solicitados: .sql, .xml, .bat
+        sql_path = os.path.join(self.temp_dir.name, "procedure_atualiza.sql")
+        with open(sql_path, "w", encoding="utf-8") as f:
+            f.write("CREATE OR REPLACE PROCEDURE atualiza_estoque IS BEGIN NULL; END;")
+
+        xml_path = os.path.join(self.temp_dir.name, "layout_pedido.xml")
+        with open(xml_path, "w", encoding="utf-8") as f:
+            f.write("<pedido id='100'><item cod='1' qtd='2'/></pedido>")
+
+        bat_path = os.path.join(self.temp_dir.name, "executa_backup.bat")
+        with open(bat_path, "w", encoding="utf-8") as f:
+            f.write("@echo off\r\necho Iniciando rotina...\r\npause")
+
+        # Importa individualmente
+        r_sql = self.import_service.import_note_file(sql_path, self.user.id, folder_id=folder_dev.id)
+        self.assertEqual(r_sql["status"], "imported")
+
+        r_xml = self.import_service.import_note_file(xml_path, self.user.id, folder_id=folder_dev.id)
+        self.assertEqual(r_xml["status"], "imported")
+
+        r_bat = self.import_service.import_note_file(bat_path, self.user.id, folder_id=folder_dev.id)
+        self.assertEqual(r_bat["status"], "imported")
+
+        # Valida notas criadas na pasta
+        notes = self.import_service.note_service.list_notes(self.user.id, folder_id=folder_dev.id, all_notes=False)
+        self.assertEqual(len(notes), 3)
+        titles = {n.title for n in notes}
+        self.assertEqual(titles, {"procedure_atualiza", "layout_pedido", "executa_backup"})
+
+        # Testa importação de pasta com lote de arquivos mistos (.sql, .xml, .bat, .txt)
+        batch_dir = os.path.join(self.temp_dir.name, "batch_mix")
+        os.makedirs(batch_dir, exist_ok=True)
+        with open(os.path.join(batch_dir, "script1.sql"), "w", encoding="utf-8") as f:
+            f.write("SELECT * FROM dual;")
+        with open(os.path.join(batch_dir, "doc.xml"), "w", encoding="utf-8") as f:
+            f.write("<doc/>")
+        with open(os.path.join(batch_dir, "run.bat"), "w", encoding="utf-8") as f:
+            f.write("exit /b 0")
+        with open(os.path.join(batch_dir, "nota.txt"), "w", encoding="utf-8") as f:
+            f.write("Anotacao normal")
+        with open(os.path.join(batch_dir, "ignorado.bin"), "w", encoding="utf-8") as f:
+            f.write("ignorar")
+
+        folder_batch = self.import_service.note_service.create_folder(self.user.id, "Lote Misto")
+        report = self.import_service.import_folder_to_notes(batch_dir, self.user.id, target_folder_id=folder_batch.id)
+        self.assertEqual(report["total"], 4)
+        self.assertEqual(report["imported"], 4)
+        self.assertEqual(report["errors"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

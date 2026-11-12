@@ -469,10 +469,18 @@ class ImportView(ctk.CTkFrame):
                 self.entry_path.delete(0, "end")
                 self.entry_path.insert(0, folder)
         else:
+            supported_types = [
+                ("Formatos Suportados (*.txt;*.xml;*.bat;*.sql)", "*.txt;*.xml;*.bat;*.sql;*.TXT;*.XML;*.BAT;*.SQL"),
+                ("Arquivos de Texto (*.txt)", "*.txt;*.TXT"),
+                ("Arquivos XML (*.xml)", "*.xml;*.XML"),
+                ("Arquivos Batch / BAT (*.bat)", "*.bat;*.BAT"),
+                ("Scripts SQL (*.sql)", "*.sql;*.SQL"),
+                ("Todos os Arquivos (*.*)", "*.*"),
+            ]
             file_paths = filedialog.askopenfilenames(
                 parent=self,
-                title="Selecione os arquivos TXT para importar como Notas (Ctrl+A para selecionar todos)",
-                filetypes=[("Arquivos de Texto", "*.txt"), ("Todos os Arquivos", "*.*")],
+                title="Selecione os arquivos para importar como Notas (TXT, XML, BAT, SQL - Ctrl+A para selecionar todos)",
+                filetypes=supported_types,
             )
             if file_paths:
                 self.selected_files = list(file_paths)
@@ -482,7 +490,7 @@ class ImportView(ctk.CTkFrame):
                 else:
                     folder_name = os.path.basename(os.path.dirname(self.selected_files[0]))
                     self.entry_path.insert(
-                        0, f"{len(self.selected_files)} arquivos TXT selecionados (pasta: {folder_name})"
+                        0, f"{len(self.selected_files)} arquivos selecionados (pasta: {folder_name})"
                     )
 
     def _log(self, text: str):

@@ -14,6 +14,8 @@ from .schema import (
     CREATE_CUSTOM_DICTIONARY_TABLE,
     CREATE_IMPORT_HISTORY_TABLE,
     CREATE_BACKUP_SETTINGS_TABLE,
+    CREATE_SCHEDULES_TABLE,
+    CREATE_SCHEDULES_INDEXES,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,7 @@ def init_db(db_path: Optional[str] = None) -> None:
             conn.execute(CREATE_CUSTOM_DICTIONARY_TABLE)
             conn.execute(CREATE_IMPORT_HISTORY_TABLE)
             conn.execute(CREATE_BACKUP_SETTINGS_TABLE)
+            conn.execute(CREATE_SCHEDULES_TABLE)
 
             # Migração incremental: garante coluna theme_preference em bancos já existentes
             cursor = conn.execute("PRAGMA table_info(users)")
@@ -58,6 +61,11 @@ def init_db(db_path: Optional[str] = None) -> None:
                     conn.execute(stmt)
 
             for statement in CREATE_NOTES_INDEXES.strip().split(";"):
+                stmt = statement.strip()
+                if stmt:
+                    conn.execute(stmt)
+
+            for statement in CREATE_SCHEDULES_INDEXES.strip().split(";"):
                 stmt = statement.strip()
                 if stmt:
                     conn.execute(stmt)

@@ -6,6 +6,7 @@ import config
 from services.diary_service import DiaryService
 from utils.date_utils import format_date_br, format_date_long_br
 from views.components.responsive_toolbar import ResponsiveToolbar
+from utils.window_utils import center_modal_on_parent
 from utils.syntax_highlighter import (
     convert_selection_case,
     format_and_highlight_xml,
@@ -36,11 +37,7 @@ class UnsavedChangesDialog(ctk.CTkToplevel):
 
         self.result = "cancel"
 
-        # Centraliza na janela pai
-        self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width() // 2) - 225
-        py = parent.winfo_y() + (parent.winfo_height() // 2) - 115
-        self.geometry(f"+{max(50, px)}+{max(50, py)}")
+        center_modal_on_parent(self, parent, 450, 230)
 
         self.container = ctk.CTkFrame(
             self,
@@ -135,10 +132,7 @@ class MessageDialog(ctk.CTkToplevel):
 
         self.result = False
 
-        self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width() // 2) - 210
-        py = parent.winfo_y() + (parent.winfo_height() // 2) - 105
-        self.geometry(f"+{max(50, px)}+{max(50, py)}")
+        center_modal_on_parent(self, parent, 420, 210)
 
         self.container = ctk.CTkFrame(
             self,
@@ -272,12 +266,7 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self._apply_icon()
         self.after(220, self._apply_icon)
 
-        # Centraliza sobre a janela principal
-        self.update_idletasks()
-        top = parent.winfo_toplevel()
-        px = top.winfo_x() + max(0, (top.winfo_width() - 820) // 2)
-        py = top.winfo_y() + max(0, (top.winfo_height() - 600) // 2)
-        self.geometry(f"820x600+{max(30, px)}+{max(30, py)}")
+        center_modal_on_parent(self, parent.winfo_toplevel(), 820, 600)
 
         self.entry = self.diary_service.get_or_create_entry(self.user_id, self.date_iso)
         self.original_content = self.entry.content or ""

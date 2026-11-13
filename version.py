@@ -3,7 +3,7 @@
 
 APP_NAME = "Diário de Anotações Inteligente"
 APP_SHORT_NAME = "Diário de Anotações"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 APP_AUTHOR = "DAILYNotes"
 
 # Repositório oficial do GitHub para verificação e download de atualizações

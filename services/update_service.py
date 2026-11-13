@@ -5,6 +5,7 @@ Verifica novas versões disponibilizadas no repositório GitHub sem perder dados
 
 import os
 import re
+import ssl
 import sys
 import json
 import logging
@@ -38,6 +39,64 @@ def is_version_newer(latest_version: str, current_version: str) -> bool:
     return parse_semver(latest_version) > parse_semver(current_version)
 
 
+def _build_ssl_context(verify: bool = True) -> ssl.SSLContext:
+    """
+    Constrói um SSLContext adequado para o ambiente Windows/PyInstaller.
+    Carrega os repositórios de certificados do Windows ('ROOT' e 'CA') e,
+    se disponível, o pacote certifi. Caso verify=False, desabilita a verificação
+    estrita de certificado (usado apenas como fallback para proxies corporativos/SSL).
+    """
+    if not verify:
+        return ssl._create_unverified_context()
+
+    ctx = ssl.create_default_context()
+
+    # 1. Tenta carregar certifi se estiver instalado no ambiente
+    try:
+        import certifi
+        cafile = certifi.where()
+        if cafile and os.path.isfile(cafile):
+            ctx.load_verify_locations(cafile=cafile)
+    except Exception:
+        pass
+
+    # 2. No Windows, carrega explicitamente certificados raiz e intermediários do Store do Windows
+    if hasattr(ssl, "enum_certificates"):
+        pems = []
+        for store_name in ("ROOT", "CA"):
+            try:
+                for cert_bytes, encoding, _trust in ssl.enum_certificates(store_name):
+                    if encoding == "x509_asn":
+                        try:
+                            pems.append(ssl.DER_cert_to_PEM_cert(cert_bytes))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        if pems:
+            try:
+                ctx.load_verify_locations(cadata="\n".join(pems))
+            except Exception:
+                for pem in pems:
+                    try:
+                        ctx.load_verify_locations(cadata=pem)
+                    except Exception:
+                        pass
+
+    return ctx
+
+
+def _is_ssl_cert_error(exc: Exception) -> bool:
+    """Verifica se uma exceção (ou sua causa/reason) foi provocada por falha de certificado SSL."""
+    if isinstance(exc, ssl.SSLError):
+        return True
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, ssl.SSLError):
+        return True
+    msg = str(exc).upper()
+    return "CERTIFICATE_VERIFY_FAILED" in msg or ("SSL" in msg and "CERTIFICATE" in msg)
+
+
 class UpdateService:
     """
     Serviço responsável por consultar a API do GitHub Releases,
@@ -47,6 +106,25 @@ class UpdateService:
     def __init__(self, current_version: Optional[str] = None):
         self.current_version = current_version or config.APP_VERSION
         self.latest_release_url = config.GITHUB_API_LATEST_RELEASE
+
+    def _open_url(self, req: urllib.request.Request, timeout: int):
+        """
+        Abre uma URL usando os certificados do Windows/certifi.
+        Se falhar por erro de verificação de certificado SSL (ex.: proxy corporativo
+        ou cadeia intermediária ausente no OpenSSL embutido), realiza fallback automático.
+        """
+        try:
+            ctx = _build_ssl_context(verify=True)
+            return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+        except Exception as e:
+            if _is_ssl_cert_error(e):
+                logger.warning(
+                    "Falha na verificação padrão de certificado SSL (%s). Tentando fallback SSL.",
+                    e,
+                )
+                unverified_ctx = _build_ssl_context(verify=False)
+                return urllib.request.urlopen(req, timeout=timeout, context=unverified_ctx)
+            raise
 
     def check_for_updates(self, timeout_sec: int = 5) -> Dict[str, Any]:
         """
@@ -87,7 +165,7 @@ class UpdateService:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            with self._open_url(req, timeout=timeout_sec) as resp:
                 if resp.status != 200:
                     result["error"] = f"Resposta inesperada do GitHub (HTTP {resp.status})"
                     return result
@@ -157,7 +235,7 @@ class UpdateService:
                 download_url,
                 headers={"User-Agent": f"DailyNotes-Updater/{self.current_version}"},
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with self._open_url(req, timeout=30) as resp:
                 total_size = int(resp.headers.get("content-length", 0))
                 downloaded = 0
                 block_size = 64 * 1024  # 64 KB

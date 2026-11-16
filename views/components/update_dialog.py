@@ -31,11 +31,12 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
         self.cancel_event = threading.Event()
 
         self.title("Nova Versão Disponível - DailyNotes")
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(540, 480)
         self.transient(parent)
         self.grab_set()
 
-        center_modal_on_parent(self, parent, 520, 440)
+        center_modal_on_parent(self, parent, 580, 500)
 
         self._build_ui()
 
@@ -84,7 +85,7 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
             text_color=config.COLORS["text_dark"],
             anchor="w",
         )
-        lbl_title.pack(fill="x", padx=16, pady=(6, 4))
+        lbl_title.pack(fill="x", padx=16, pady=(6, 8))
 
         # Aviso de segurança dos dados locais
         safety_card = ctk.CTkFrame(
@@ -94,18 +95,26 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
             border_width=1,
             border_color=config.COLORS["border_dark"],
         )
-        safety_card.pack(fill="x", padx=16, pady=(0, 10))
+        safety_card.pack(fill="x", padx=16, pady=(0, 12))
 
         lbl_safety = ctk.CTkLabel(
             safety_card,
             text="🔒 SEUS DADOS ESTÃO SEGUROS: Todas as suas anotações, notas, pastas, diários "
                  "e configurações ficam preservados no seu banco de dados local durante a atualização.",
-            font=ctk.CTkFont(size=11, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             text_color=config.COLORS["success"],
-            wraplength=450,
+            wraplength=490,
             justify="left",
+            anchor="w",
         )
-        lbl_safety.pack(padx=12, pady=8)
+        lbl_safety.pack(fill="x", padx=14, pady=10)
+
+        def _update_safety_wrap(event):
+            usable = max(260, event.width - 28)
+            if abs(int(lbl_safety.cget("wraplength") or 0) - usable) > 4:
+                lbl_safety.configure(wraplength=usable)
+
+        safety_card.bind("<Configure>", _update_safety_wrap)
 
         # Notas da Versão (Changelog)
         lbl_notes_title = ctk.CTkLabel(
@@ -115,11 +124,11 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
             text_color=config.COLORS["text_muted"],
             anchor="w",
         )
-        lbl_notes_title.pack(fill="x", padx=16, pady=(0, 4))
+        lbl_notes_title.pack(fill="x", padx=16, pady=(0, 6))
 
         self.txt_notes = ctk.CTkTextbox(
             self.container,
-            height=120,
+            height=140,
             corner_radius=8,
             fg_color=config.COLORS["sidebar"],
             text_color=config.COLORS["text_dark"],
@@ -280,8 +289,33 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
             )
             self.update_idletasks()
 
-            # Dispara o instalador desvinculado
-            subprocess.Popen([installer_path], close_fds=True)
+            # Informa ao instalador exatamente a pasta em que o executável atual está instalado
+            cmd_args = []
+            if getattr(sys, "frozen", False):
+                current_install_dir = os.path.dirname(os.path.abspath(sys.executable))
+                cmd_args.extend(["--install-dir", current_install_dir])
+
+            launched = False
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    params = subprocess.list2cmdline(cmd_args) if cmd_args else ""
+                    ret = ctypes.windll.shell32.ShellExecuteW(
+                        None,
+                        "runas",
+                        os.path.abspath(installer_path),
+                        params,
+                        os.path.dirname(os.path.abspath(installer_path)),
+                        1,
+                    )
+                    if ret > 32:
+                        launched = True
+                except Exception:
+                    launched = False
+
+            if not launched:
+                # Fallback via Popen caso ShellExecuteW não seja usado
+                subprocess.Popen([installer_path] + cmd_args, close_fds=True)
 
             # Encerra o aplicativo atual para liberar arquivos em uso
             self.after(1000, lambda: sys.exit(0))

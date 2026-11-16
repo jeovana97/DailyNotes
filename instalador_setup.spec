@@ -27,6 +27,8 @@ a = Analysis(
         'tkinter.messagebox',
         'winreg',
         'zipfile',
+        'utils',
+        'utils.window_utils',
     ],
     hookspath=[],
     hooksconfig={},
@@ -76,5 +78,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     cdict=uncompressed_cdict,
+    uac_admin=True,
     icon='assets/icon.ico' if os.path.exists('assets/icon.ico') else None,
 )

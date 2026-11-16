@@ -12,6 +12,118 @@ import customtkinter as ctk
 import config
 
 
+class WidgetTooltip:
+    """
+    Tooltip flutuante leve para widgets CustomTkinter/Tkinter.
+    Exibe o nome/descrição do botão ao passar o mouse sobre o ícone.
+    """
+
+    def __init__(self, widget, text: str, delay_ms: int = 320):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self._after_id: Optional[str] = None
+        self._tip_window: Optional[tk.Toplevel] = None
+
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+        self.widget.bind("<Unmap>", self._on_leave, add="+")
+        self.widget.bind("<Destroy>", self._on_leave, add="+")
+
+    def _on_enter(self, event=None):
+        self._cancel_timer()
+        if not self.text:
+            return
+        try:
+            if not self.widget.winfo_exists():
+                return
+            self._after_id = self.widget.after(self.delay_ms, self._show_tooltip)
+        except Exception:
+            pass
+
+    def _on_leave(self, event=None):
+        self._cancel_timer()
+        self._hide_tooltip()
+
+    def _cancel_timer(self):
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show_tooltip(self):
+        self._after_id = None
+        if self._tip_window is not None:
+            return
+        try:
+            if not self.widget.winfo_exists() or not self.widget.winfo_ismapped():
+                return
+        except Exception:
+            return
+
+        mode = ctk.get_appearance_mode()
+        is_dark = (mode == "Dark")
+        bg_color = "#0F172A" if is_dark else "#1E293B"
+        fg_color = "#F8FAFC"
+        border_color = "#475569" if is_dark else "#334155"
+
+        tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        try:
+            tw.wm_attributes("-topmost", True)
+        except Exception:
+            pass
+
+        frame = tk.Frame(
+            tw,
+            bg=bg_color,
+            highlightbackground=border_color,
+            highlightthickness=1,
+            bd=0,
+        )
+        frame.pack()
+
+        lbl = tk.Label(
+            frame,
+            text=self.text,
+            bg=bg_color,
+            fg=fg_color,
+            font=("Segoe UI", 9, "bold"),
+            padx=8,
+            pady=4,
+            justify="left",
+        )
+        lbl.pack()
+
+        tw.update_idletasks()
+        tip_w = tw.winfo_reqwidth()
+        tip_h = tw.winfo_reqheight()
+
+        x = self.widget.winfo_rootx()
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+
+        sw = self.widget.winfo_screenwidth()
+        sh = self.widget.winfo_screenheight()
+        if x + tip_w > sw - 8:
+            x = max(8, sw - tip_w - 8)
+        if y + tip_h > sh - 8:
+            y = max(8, self.widget.winfo_rooty() - tip_h - 4)
+
+        tw.wm_geometry(f"+{x}+{y}")
+        self._tip_window = tw
+
+    def _hide_tooltip(self):
+        if self._tip_window is not None:
+            try:
+                self._tip_window.destroy()
+            except Exception:
+                pass
+            self._tip_window = None
+
+
 class ResponsiveToolbar(ctk.CTkFrame):
     """
     Barra de botões responsiva que monitora a largura disponível (<Configure>)
@@ -54,6 +166,7 @@ class ResponsiveToolbar(ctk.CTkFrame):
             text_color=config.COLORS["button_text"],
             command=self._show_overflow_menu,
         )
+        self._overflow_tooltip = WidgetTooltip(self.btn_overflow, "Mais opções (»)")
 
         self.bind("<Configure>", self._on_configure)
 
@@ -88,11 +201,13 @@ class ResponsiveToolbar(ctk.CTkFrame):
             text_color=text_color or config.COLORS["button_text"],
             command=command,
         )
+        tooltip = WidgetTooltip(btn, full_label)
 
         self.items.append({
             "type": "button",
             "key": key,
             "widget": btn,
+            "tooltip": tooltip,
             "symbol_text": symbol_text,
             "full_label": full_label,
             "command": command,

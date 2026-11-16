@@ -126,6 +126,17 @@ class TestUpdateService(unittest.TestCase):
             with open(dest_file, "rb") as f:
                 self.assertEqual(f.read(), binary_data)
 
+    def test_installer_install_dir_resolution(self):
+        from installer_wizard import get_default_install_dir, resolve_initial_install_dir
+
+        default_dir = get_default_install_dir()
+        self.assertTrue(default_dir.endswith(os.path.join("DiarioAnotacoes")))
+        self.assertIn("Program Files", default_dir)
+
+        custom_dir = os.path.abspath(os.path.join("D:\\", "Apps", "MeuDiario"))
+        self.assertEqual(resolve_initial_install_dir(["--install-dir", custom_dir]), custom_dir)
+        self.assertEqual(resolve_initial_install_dir([f"--install-dir={custom_dir}"]), custom_dir)
+
 
 if __name__ == "__main__":
     unittest.main()

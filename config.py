@@ -9,7 +9,7 @@ try:
     from version import APP_NAME, APP_VERSION, APP_AUTHOR, GITHUB_REPO_OWNER, GITHUB_REPO_NAME, GITHUB_API_LATEST_RELEASE, GITHUB_RELEASES_URL
 except ImportError:
     APP_NAME = "Diário de Anotações Inteligente"
-    APP_VERSION = "1.3.1"
+    APP_VERSION = "1.4.0"
     APP_AUTHOR = "DAILYNotes"
     GITHUB_REPO_OWNER = "jeovana97"
     GITHUB_REPO_NAME = "DailyNotes"
@@ -30,8 +30,25 @@ ICON_ICO_PATH = os.path.join(ASSETS_DIR, "icon.ico")
 ICON_PNG_PATH = os.path.join(ASSETS_DIR, "icon.png")
 
 # Diretório de dados persistentes do usuário
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+def _resolve_data_dir() -> str:
+    local_data = os.path.join(BASE_DIR, "data")
+    try:
+        os.makedirs(local_data, exist_ok=True)
+        probe_file = os.path.join(local_data, ".write_probe")
+        with open(probe_file, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe_file)
+        return local_data
+    except Exception:
+        # Quando instalado em diretórios protegidos (ex: C:\Program Files\DiarioAnotacoes),
+        # utiliza o diretório gravável do usuário em %LOCALAPPDATA%\DiarioAnotacoes\data
+        app_local = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
+        user_data_dir = os.path.join(app_local, "DiarioAnotacoes", "data")
+        os.makedirs(user_data_dir, exist_ok=True)
+        return user_data_dir
+
+
+DATA_DIR = _resolve_data_dir()
 
 # Caminho do banco de dados SQLite
 DB_PATH = os.path.join(DATA_DIR, "diario.db")

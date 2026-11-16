@@ -157,6 +157,46 @@ class TestScheduleService(unittest.TestCase):
         notified_again = self.schedule_service.check_and_notify_due_schedules(user_id=self.user.id)
         self.assertEqual(len(notified_again), 0)
 
+    def test_snooze_schedule_and_toast_protocol_parsing(self):
+        from utils.notification_utils import (
+            parse_toast_protocol_url,
+            write_pending_toast_action,
+            consume_pending_toast_action,
+        )
+
+        # Cria e marca como notificado
+        sched, _ = self.schedule_service.create_schedule(
+            user_id=self.user.id,
+            title="Reunião para Adiar",
+            schedule_date="2026-11-10",
+            schedule_time="09:00",
+        )
+        self.schedule_service.set_status(sched.id, self.user.id, "notificado")
+
+        # Adia por 10 minutos
+        ok, msg = self.schedule_service.snooze_schedule(sched.id, minutes=10)
+        self.assertTrue(ok, msg)
+        updated = self.schedule_service.get_schedule_by_id(sched.id)
+        self.assertEqual(updated.status, "pendente")
+        self.assertEqual(updated.notified_at, "")
+
+        # Testa parsing das URLs de protocolo das notificações Toast
+        open_cmd = parse_toast_protocol_url("dailynotes://schedule/open?id=42")
+        self.assertEqual(open_cmd, {"action": "open", "schedule_id": 42})
+
+        snooze_cmd = parse_toast_protocol_url("dailynotes://schedule/snooze?id=42&minutes=15")
+        self.assertEqual(snooze_cmd, {"action": "snooze", "schedule_id": 42, "minutes": 15})
+
+        self.assertIsNone(parse_toast_protocol_url("https://example.com"))
+
+        # Testa fila de ação pendente
+        write_pending_toast_action({"action": "open_schedule", "schedule_id": 42}, data_dir=self.temp_dir.name)
+        consumed = consume_pending_toast_action(data_dir=self.temp_dir.name)
+        self.assertIsNotNone(consumed)
+        self.assertEqual(consumed["action"], "open_schedule")
+        self.assertEqual(consumed["schedule_id"], 42)
+        self.assertIsNone(consume_pending_toast_action(data_dir=self.temp_dir.name))
+
 
 if __name__ == "__main__":
     unittest.main()

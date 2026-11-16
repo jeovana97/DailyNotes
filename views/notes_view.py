@@ -2273,7 +2273,10 @@ class NotesView(ctk.CTkFrame):
         if text_widget.tag_ranges("sel"):
             text_widget.delete("sel.first", "sel.last")
 
-        text_widget.insert("insert", clipboard_text)
+        start_pos = text_widget.index("insert")
+        text_widget.insert(start_pos, clipboard_text)
+        pasted_end = text_widget.index(f"{start_pos} + {len(clipboard_text)} chars")
+        text_widget.mark_set("insert", pasted_end)
 
         try:
             text_widget.edit_separator()
@@ -2281,10 +2284,25 @@ class NotesView(ctk.CTkFrame):
             pass
 
         auto_highlight_content(self.txt_content)
-        text_widget.see("insert")
+        text_widget.mark_set("insert", pasted_end)
+        text_widget.see(pasted_end)
+        text_widget.update_idletasks()
+        text_widget.see(pasted_end)
         text_widget.focus_set()
         self._on_field_modified()
+        self.after(15, lambda idx=pasted_end: self._scroll_to_pasted_end(idx))
         return "break"
+
+    def _scroll_to_pasted_end(self, target_index: str):
+        """Garante que após o cálculo de quebra de linhas (word wrap) a visão mostre o final da cópia."""
+        try:
+            if not self.winfo_exists() or not self.txt_content.winfo_exists():
+                return
+            text_widget = self.txt_content._textbox
+            text_widget.mark_set("insert", target_index)
+            text_widget.see(target_index)
+        except Exception:
+            pass
 
     # =========================================================================
     # Corretor Ortográfico Nativo do Windows

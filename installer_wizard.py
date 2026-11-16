@@ -19,7 +19,7 @@ try:
 except ImportError:
     APP_NAME = "Diário de Anotações Inteligente"
     APP_SHORT_NAME = "Diário de Anotações"
-    APP_VERSION = "1.3.1"
+    APP_VERSION = "1.4.0"
     APP_PUBLISHER = "DAILYNotes"
 
 EXE_FILENAME = "DiarioAnotacoes.exe"
@@ -33,11 +33,54 @@ def get_bundled_resource_dir() -> str:
 
 
 def get_default_install_dir() -> str:
-    """Retorna o caminho padrão de instalação no Windows (%LOCALAPPDATA%\\Programs\\DiarioAnotacoes)."""
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    if not local_appdata:
-        local_appdata = os.path.expanduser("~\\AppData\\Local")
-    return os.path.join(local_appdata, "Programs", "DiarioAnotacoes")
+    """Retorna o caminho padrão de instalação no Windows (C:\\Program Files\\DiarioAnotacoes)."""
+    program_files = os.environ.get("ProgramFiles") or os.environ.get("PROGRAMFILES") or r"C:\Program Files"
+    return os.path.join(program_files, "DiarioAnotacoes")
+
+
+def get_existing_install_dir_from_registry() -> str:
+    """Verifica no registro do Windows (HKLM/HKCU) se já existe uma instalação prévia do aplicativo."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+        reg_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\DiarioAnotacoes"
+        for root_hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(root_hive, reg_path) as key:
+                    loc, _ = winreg.QueryValueEx(key, "InstallLocation")
+                    if loc and os.path.isdir(loc) and os.path.isfile(os.path.join(loc, EXE_FILENAME)):
+                        return os.path.abspath(loc)
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
+def resolve_initial_install_dir(argv=None) -> str:
+    """
+    Determina a pasta inicial de instalação seguindo a prioridade:
+    1. Argumento --install-dir passado pelo atualizador do aplicativo;
+    2. Local de instalação já registrado no Windows (para atualizações manuais);
+    3. Pasta padrão C:\\Program Files\\DiarioAnotacoes.
+    """
+    args = list(argv) if argv is not None else sys.argv[1:]
+    for idx, arg in enumerate(args):
+        if arg == "--install-dir" and idx + 1 < len(args):
+            candidate = args[idx + 1].strip().strip('"')
+            if candidate:
+                return os.path.abspath(candidate)
+        elif arg.startswith("--install-dir="):
+            candidate = arg.split("=", 1)[1].strip().strip('"')
+            if candidate:
+                return os.path.abspath(candidate)
+
+    existing = get_existing_install_dir_from_registry()
+    if existing:
+        return existing
+
+    return get_default_install_dir()
 
 
 def get_clean_child_env() -> dict:
@@ -78,23 +121,24 @@ def create_windows_shortcut(target_exe: str, shortcut_path: str, icon_path: str,
 
 
 def register_uninstaller_in_registry(install_dir: str, exe_path: str, icon_path: str, uninstaller_bat: str):
-    """Registra o aplicativo em 'Aplicativos Instalados' do usuário no Windows (HKCU)."""
+    """Registra o aplicativo em 'Aplicativos Instalados' do Windows (HKLM e HKCU)."""
     if sys.platform != "win32":
         return
-    try:
-        import winreg
-        reg_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\DiarioAnotacoes"
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_path) as key:
-            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, APP_NAME)
-            winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, APP_VERSION)
-            winreg.SetValueEx(key, "Publisher", 0, winreg.REG_SZ, APP_PUBLISHER)
-            winreg.SetValueEx(key, "InstallLocation", 0, winreg.REG_SZ, install_dir)
-            winreg.SetValueEx(key, "DisplayIcon", 0, winreg.REG_SZ, icon_path)
-            winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, f'"{uninstaller_bat}"')
-            winreg.SetValueEx(key, "NoModify", 0, winreg.REG_DWORD, 1)
-            winreg.SetValueEx(key, "NoRepair", 0, winreg.REG_DWORD, 1)
-    except Exception:
-        pass
+    import winreg
+    reg_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\DiarioAnotacoes"
+    for root_hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.CreateKey(root_hive, reg_path) as key:
+                winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, APP_NAME)
+                winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, APP_VERSION)
+                winreg.SetValueEx(key, "Publisher", 0, winreg.REG_SZ, APP_PUBLISHER)
+                winreg.SetValueEx(key, "InstallLocation", 0, winreg.REG_SZ, install_dir)
+                winreg.SetValueEx(key, "DisplayIcon", 0, winreg.REG_SZ, icon_path)
+                winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, f'"{uninstaller_bat}"')
+                winreg.SetValueEx(key, "NoModify", 0, winreg.REG_DWORD, 1)
+                winreg.SetValueEx(key, "NoRepair", 0, winreg.REG_DWORD, 1)
+        except Exception:
+            pass
 
 
 def create_uninstaller_script(install_dir: str, desktop_lnk: str, start_menu_lnk: str) -> str:
@@ -127,8 +171,9 @@ class InstallerWizardApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"Instalador - {APP_NAME} v{APP_VERSION}")
-        self.geometry("560x430")
-        self.resizable(False, False)
+        self.geometry("580x480")
+        self.minsize(560, 460)
+        self.resizable(True, True)
         self.configure(bg="#0F172A")
 
         self.resource_dir = get_bundled_resource_dir()
@@ -149,15 +194,19 @@ class InstallerWizardApp(tk.Tk):
             except Exception:
                 pass
 
-        # Centraliza na tela
+        # Centraliza na tela principal
         self.update_idletasks()
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        x = (sw // 2) - 280
-        y = (sh // 2) - 215
-        self.geometry(f"560x430+{max(20, x)}+{max(20, y)}")
+        try:
+            from utils.window_utils import center_window_on_primary_screen
+            center_window_on_primary_screen(self, desired_width=580, desired_height=480)
+        except Exception:
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            x = (sw // 2) - 290
+            y = (sh // 2) - 240
+            self.geometry(f"580x480+{max(20, x)}+{max(20, y)}")
 
-        self.install_dir_var = tk.StringVar(value=get_default_install_dir())
+        self.install_dir_var = tk.StringVar(value=resolve_initial_install_dir())
         self.desktop_shortcut_var = tk.BooleanVar(value=True)
         self.startmenu_shortcut_var = tk.BooleanVar(value=True)
         self.launch_after_var = tk.BooleanVar(value=True)

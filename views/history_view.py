@@ -7,6 +7,7 @@ from models.user import User
 from models.diary import DiaryEntry
 from services.diary_service import DiaryService
 from utils.date_utils import format_date_br, format_date_long_br, get_today_iso, MESES_PT
+from utils.syntax_highlighter import configure_syntax_tags, auto_highlight_content, clear_syntax_tags
 from views.components.calendar_widget import CalendarWidget
 from views.components.dialogs import DiaryNoteReaderDialog
 
@@ -36,6 +37,7 @@ class HistoryView(ctk.CTkFrame):
         self.current_year = dt.year
         self.current_month = dt.month
         self._reader_dialog: Optional[DiaryNoteReaderDialog] = None
+        self._showing_single_day: bool = False
 
         self._build_ui()
         self._refresh_month_data(self.current_year, self.current_month)
@@ -146,9 +148,72 @@ class HistoryView(ctk.CTkFrame):
         )
         self.lbl_month_entries.pack(side="left")
 
+        self.btn_show_all_month = ctk.CTkButton(
+            self.month_header_frame,
+            text="📅 Ver Todas do Mês",
+            width=155,
+            height=30,
+            corner_radius=8,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=self._show_all_month_entries,
+        )
+
+        # Container da lista cronológica do mês
+        self.month_list_container = ctk.CTkFrame(self.right_col, fg_color="transparent")
+        self.month_list_container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
         # Scrollable Frame com a lista cronológica
-        self.entries_scroll = ctk.CTkScrollableFrame(self.right_col, fg_color="transparent")
-        self.entries_scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.entries_scroll = ctk.CTkScrollableFrame(self.month_list_container, fg_color="transparent")
+        self.entries_scroll.pack(fill="both", expand=True)
+
+        # Container dedicado para pré-visualização completa de um dia específico
+        self.day_preview_frame = ctk.CTkFrame(
+            self.right_col,
+            corner_radius=10,
+            fg_color=config.COLORS["card_dark_alt"],
+            border_width=1,
+            border_color=config.COLORS["border_dark"],
+        )
+
+        self.preview_top_bar = ctk.CTkFrame(self.day_preview_frame, fg_color="transparent")
+        self.preview_top_bar.pack(fill="x", padx=14, pady=(12, 6))
+
+        self.lbl_preview_meta = ctk.CTkLabel(
+            self.preview_top_bar,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color=config.COLORS["text_muted"],
+            anchor="w",
+        )
+        self.lbl_preview_meta.pack(side="left", fill="x", expand=True)
+
+        self.btn_preview_open = ctk.CTkButton(
+            self.preview_top_bar,
+            text="📖 Abrir / Editar",
+            width=135,
+            height=30,
+            corner_radius=6,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["primary"],
+            hover_color=config.COLORS["primary_hover"],
+            text_color="#FFFFFF",
+            command=self._on_open_current_selected,
+        )
+        self.btn_preview_open.pack(side="right")
+
+        self.txt_day_preview = ctk.CTkTextbox(
+            self.day_preview_frame,
+            corner_radius=8,
+            fg_color=config.COLORS["sidebar"],
+            text_color=config.COLORS["text_dark"],
+            font=ctk.CTkFont(family="Segoe UI", size=14),
+            wrap="word",
+        )
+        self.txt_day_preview.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        configure_syntax_tags(self.txt_day_preview._textbox)
 
     def _refresh_month_data(self, year: int, month: int):
         self.current_year = year
@@ -163,15 +228,25 @@ class HistoryView(ctk.CTkFrame):
         # Atualiza o detalhe da data atualmente selecionada
         self._update_selected_date_detail()
 
-        # Atualiza a lista cronológica do mês
-        self._render_month_entries(year, month)
+        # Atualiza o painel direito (pré-visualização do dia ou lista completa do mês)
+        if self._showing_single_day:
+            self._render_selected_day_preview(self.selected_date_iso)
+        else:
+            self._render_month_entries(year, month)
 
     def _on_calendar_date_selected(self, date_iso: str):
         self.selected_date_iso = date_iso
+        self._showing_single_day = True
         self._update_selected_date_detail()
+        self._render_selected_day_preview(date_iso)
 
     def _on_calendar_month_changed(self, year: int, month: int):
+        self._showing_single_day = False
         self._refresh_month_data(year, month)
+
+    def _show_all_month_entries(self):
+        self._showing_single_day = False
+        self._render_month_entries(self.current_year, self.current_month)
 
     def _update_selected_date_detail(self):
         long_date = format_date_long_br(self.selected_date_iso)
@@ -194,6 +269,10 @@ class HistoryView(ctk.CTkFrame):
             self.btn_open_selected.configure(text="📖 Abrir / Criar Anotação")
 
     def _render_month_entries(self, year: int, month: int):
+        self.day_preview_frame.pack_forget()
+        self.btn_show_all_month.pack_forget()
+        self.month_list_container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
         for widget in self.entries_scroll.winfo_children():
             widget.destroy()
 
@@ -281,6 +360,49 @@ class HistoryView(ctk.CTkFrame):
 
             card.bind("<Double-Button-1>", lambda e, d=item.entry_date: self._open_date(d))
             lbl_preview.bind("<Double-Button-1>", lambda e, d=item.entry_date: self._open_date(d))
+
+    def _render_selected_day_preview(self, date_iso: str):
+        """Exibe na coluna direita a pré-visualização completa da anotação do dia selecionado."""
+        self.month_list_container.pack_forget()
+        self.day_preview_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.btn_show_all_month.pack(side="right")
+
+        date_br = format_date_br(date_iso)
+        long_date = format_date_long_br(date_iso)
+        weekday = long_date.split(",")[0] if "," in long_date else ""
+        self.lbl_month_entries.configure(
+            text=f"Pré-visualização: {date_br} ({weekday})" if weekday else f"Pré-visualização: {date_br}"
+        )
+
+        entry = self.diary_service.get_entry_by_date(self.current_user.id, date_iso)
+
+        self.txt_day_preview.configure(state="normal")
+        self.txt_day_preview.delete("1.0", "end")
+
+        if entry and entry.content.strip():
+            words = len(entry.content.split())
+            chars = len(entry.content)
+            self.lbl_preview_meta.configure(
+                text=f"🟢 {words} palavras | {chars:,} caracteres | Alterado em: {entry.updated_at}",
+                text_color=config.COLORS["success"],
+            )
+            self.btn_preview_open.configure(text="📖 Abrir / Editar")
+            self.txt_day_preview.insert("1.0", entry.content)
+            auto_highlight_content(self.txt_day_preview)
+        else:
+            clear_syntax_tags(self.txt_day_preview._textbox)
+            self.lbl_preview_meta.configure(
+                text="⚪ Nenhuma anotação registrada neste dia.",
+                text_color=config.COLORS["text_muted"],
+            )
+            self.btn_preview_open.configure(text="📝 Criar Anotação")
+            self.txt_day_preview.insert(
+                "1.0",
+                f"Nenhuma anotação foi registrada para o dia {date_br}.\n\n"
+                "Clique no botão '📝 Criar Anotação' acima ou '📖 Abrir / Criar Anotação' ao lado para escrever neste dia.",
+            )
+
+        self.txt_day_preview.configure(state="disabled")
 
     def _open_date(self, date_iso: str):
         """Abre a anotação da data selecionada em uma janela exclusiva para leitura, com botão para editar."""

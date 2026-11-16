@@ -859,14 +859,23 @@ class SchedulesView(ctk.CTkFrame):
             else:
                 show_message(self, "Erro", msg, kind="danger")
 
+    def open_schedule_by_id(self, schedule_id: Optional[int]):
+        """Atualiza a lista e abre o modal do agendamento solicitado (ex: via notificação)."""
+        self.refresh()
+        if schedule_id is None:
+            return
+        sched = self.schedule_service.get_schedule_by_id(schedule_id, self.current_user.id)
+        if sched is not None:
+            self.after(100, lambda s=sched: self._handle_edit_schedule(s))
+
     def _handle_manual_notify(self, sched: Schedule):
         preview = sched.content[:120].replace("\n", " ") if sched.content else ""
         msg = f"Horário: {sched.schedule_time} ({sched.date_br})\n{preview}".strip()
         send_windows_notification(
             title=f"⏰ DailyNotes: {sched.title}",
             message=msg,
-            app_id="DailyNotes",
             play_sound=True,
+            schedule_id=sched.id,
         )
         show_message(
             self,
@@ -880,7 +889,6 @@ class SchedulesView(ctk.CTkFrame):
         send_windows_notification(
             title="⏰ DailyNotes - Teste de Notificação",
             message=f"Esta é uma notificação nativa do Windows disparada com sucesso às {now_time}!",
-            app_id="DailyNotes",
             play_sound=True,
         )
         show_message(

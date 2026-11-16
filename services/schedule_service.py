@@ -219,6 +219,50 @@ class ScheduleService:
         finally:
             conn.close()
 
+    def snooze_schedule(
+        self,
+        schedule_id: int,
+        minutes: int = 10,
+        user_id: Optional[int] = None,
+    ) -> Tuple[bool, str]:
+        """Adia um agendamento em X minutos a partir de agora, retornando-o para 'pendente'."""
+        target_dt = datetime.datetime.now() + datetime.timedelta(minutes=max(1, int(minutes)))
+        new_date = target_dt.strftime("%Y-%m-%d")
+        new_time = target_dt.strftime("%H:%M")
+        now_ts = get_current_timestamp()
+
+        conn = get_connection(self.db_path)
+        try:
+            cursor = conn.cursor()
+            if user_id is not None:
+                cursor.execute(
+                    """
+                    UPDATE schedules
+                    SET schedule_date = ?, schedule_time = ?, status = 'pendente',
+                        notified_at = '', updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (new_date, new_time, now_ts, schedule_id, user_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE schedules
+                    SET schedule_date = ?, schedule_time = ?, status = 'pendente',
+                        notified_at = '', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (new_date, new_time, now_ts, schedule_id),
+                )
+            conn.commit()
+            if cursor.rowcount > 0:
+                return True, f"Agendamento adiado para {new_time} ({target_dt.strftime('%d/%m/%Y')})."
+            return False, "Agendamento não encontrado."
+        except Exception as e:
+            return False, str(e)
+        finally:
+            conn.close()
+
     def get_schedule_by_id(self, schedule_id: int, user_id: Optional[int] = None) -> Optional[Schedule]:
         """Retorna um agendamento específico."""
         conn = get_connection(self.db_path)
@@ -398,8 +442,8 @@ class ScheduleService:
                 send_windows_notification(
                     title=notif_title,
                     message=notif_msg,
-                    app_id="DailyNotes",
                     play_sound=True,
+                    schedule_id=sched.id,
                 )
 
                 # Gerencia repetição ou atualiza status para 'notificado'

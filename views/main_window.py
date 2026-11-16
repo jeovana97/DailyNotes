@@ -16,6 +16,7 @@ from services.backup_service import BackupService
 from services.spellcheck_service import WindowsSpellCheckService
 from services.update_service import UpdateService
 from services.schedule_service import ScheduleService
+from utils.notification_utils import consume_pending_toast_action
 
 from views.login_view import LoginView
 from views.diary_view import DiaryView
@@ -151,6 +152,9 @@ class MainWindow(ctk.CTk):
         self.nav_buttons = {}
         self._auto_backup_timer_id = None
         self._reminder_timer_id = None
+        self._toast_poll_timer_id = None
+        self._pending_toast_open: bool = False
+        self._pending_schedule_open_id: Optional[int] = None
         self._update_checked = False
 
         # Intercepta evento de fechar janela
@@ -159,6 +163,7 @@ class MainWindow(ctk.CTk):
         self._show_login_screen()
         self._schedule_auto_backup_check(delay_ms=4000)
         self._schedule_reminder_check(delay_ms=3000)
+        self._schedule_toast_action_poll(delay_ms=800)
         # Verifica atualizações silenciosamente em segundo plano após 2.5 segundos
         self.after(2500, self._start_background_update_check)
 
@@ -215,7 +220,21 @@ class MainWindow(ctk.CTk):
         user_theme = "light" if str(getattr(user, "theme_preference", "dark")).lower() == "light" else "dark"
         ctk.set_appearance_mode(user_theme)
         self._build_main_layout()
-        self.navigate_to("diary")
+        # Verifica se há solicitação pendente para abrir um agendamento via notificação
+        pending_action = consume_pending_toast_action()
+        if pending_action and pending_action.get("action") == "open_schedule":
+            self._pending_toast_open = True
+            self._pending_schedule_open_id = pending_action.get("schedule_id")
+
+        if self._pending_toast_open:
+            sched_id = self._pending_schedule_open_id
+            self._pending_toast_open = False
+            self._pending_schedule_open_id = None
+            self.navigate_to("schedules")
+            if hasattr(self.active_view, "open_schedule_by_id"):
+                self.active_view.open_schedule_by_id(sched_id)
+        else:
+            self.navigate_to("diary")
 
     def _build_main_layout(self):
         """Monta a barra lateral de navegação e o container de conteúdo principal."""
@@ -470,6 +489,12 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
             self._reminder_timer_id = None
+        if self._toast_poll_timer_id is not None:
+            try:
+                self.after_cancel(self._toast_poll_timer_id)
+            except Exception:
+                pass
+            self._toast_poll_timer_id = None
         self.destroy()
 
     def _schedule_reminder_check(self, delay_ms: int = 25000):
@@ -500,6 +525,55 @@ class MainWindow(ctk.CTk):
             pass
         finally:
             self._schedule_reminder_check(delay_ms=25000)
+
+    def _schedule_toast_action_poll(self, delay_ms: int = 800):
+        """Verifica periodicamente se houve clique em botões de notificações do Windows."""
+        try:
+            if not self.winfo_exists():
+                return
+            if self._toast_poll_timer_id is not None:
+                try:
+                    self.after_cancel(self._toast_poll_timer_id)
+                except Exception:
+                    pass
+            self._toast_poll_timer_id = self.after(delay_ms, self._poll_toast_actions)
+        except Exception:
+            pass
+
+    def _poll_toast_actions(self):
+        self._toast_poll_timer_id = None
+        try:
+            if not self.winfo_exists():
+                return
+            action_data = consume_pending_toast_action()
+            if action_data:
+                act = action_data.get("action")
+                sched_id = action_data.get("schedule_id")
+                if act == "open_schedule":
+                    # Traz a janela para o primeiro plano
+                    try:
+                        self.deiconify()
+                        self.lift()
+                        self.attributes("-topmost", True)
+                        self.after(200, lambda: self.attributes("-topmost", False) if self.winfo_exists() else None)
+                        self.focus_force()
+                    except Exception:
+                        pass
+
+                    if self.current_user:
+                        self.navigate_to("schedules")
+                        if hasattr(self.active_view, "open_schedule_by_id"):
+                            self.active_view.open_schedule_by_id(sched_id)
+                    else:
+                        self._pending_toast_open = True
+                        self._pending_schedule_open_id = sched_id
+                elif act == "snooze_refresh":
+                    if self.current_user and hasattr(self.active_view, "refresh"):
+                        self.active_view.refresh()
+        except Exception:
+            pass
+        finally:
+            self._schedule_toast_action_poll(delay_ms=800)
 
     def _schedule_auto_backup_check(self, delay_ms: int = 15000):
         """Agenda verificação periódica do backup automático agendado."""

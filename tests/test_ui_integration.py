@@ -64,6 +64,26 @@ class TestUIIntegration(unittest.TestCase):
         app.navigate_to("history", initial_date="2026-11-05")
         app.update()
         history_view = app.active_view
+        # Ao abrir, deve mostrar todas as anotações do mês
+        self.assertFalse(history_view._showing_single_day)
+        self.assertEqual(history_view.month_list_container.winfo_manager(), "pack")
+        self.assertEqual(history_view.day_preview_frame.winfo_manager(), "")
+
+        # Ao clicar em um dia específico do calendário, deve mostrar a pré-visualização completa da nota
+        history_view._on_calendar_date_selected("2026-11-05")
+        app.update()
+        self.assertTrue(history_view._showing_single_day)
+        self.assertEqual(history_view.day_preview_frame.winfo_manager(), "pack")
+        self.assertEqual(history_view.month_list_container.winfo_manager(), "")
+        preview_content = history_view.txt_day_preview.get("1.0", "end-1c")
+        self.assertIn("Nota de teste para leitura e edicao - editado", preview_content)
+
+        # Ao clicar em Ver Todas do Mês, volta para a lista completa do mês
+        history_view._show_all_month_entries()
+        app.update()
+        self.assertFalse(history_view._showing_single_day)
+        self.assertEqual(history_view.month_list_container.winfo_manager(), "pack")
+
         history_view._open_date("2026-11-05")
         app.update()
         self.assertIs(app.active_view, history_view)
@@ -71,20 +91,34 @@ class TestUIIntegration(unittest.TestCase):
         self.assertFalse(history_view._reader_dialog.is_editing)
         history_view._reader_dialog.destroy()
 
-        # Verifica colagem de texto no Diário do Dia posicionando o cursor no fim do texto
+        # Verifica colagem de texto no Diário do Dia posicionando o cursor no final da cópia (não no fim do arquivo)
         app.navigate_to("diary")
         app.update()
         diary_view = app.active_view
         diary_view.txt_content.delete("1.0", "end")
-        diary_view.txt_content.insert("1.0", "Linha inicial\n")
+        diary_view.txt_content.insert("1.0", "Linha inicial\nLinha final")
         diary_view.txt_content._textbox.mark_set("insert", "1.0")
+        pasted_str = "Texto colado 1\nTexto colado final"
         app.clipboard_clear()
-        app.clipboard_append("Texto colado 1\nTexto colado final")
+        app.clipboard_append(pasted_str)
         diary_view._on_paste()
         app.update()
         tb = diary_view.txt_content._textbox
-        self.assertEqual(tb.index("insert"), tb.index("end-1c"))
+        expected_end = tb.index(f"1.0 + {len(pasted_str)} chars")
+        self.assertEqual(tb.index("insert"), expected_end)
+        self.assertNotEqual(tb.index("insert"), tb.index("end-1c"))
         self.assertIn("Texto colado final", diary_view.txt_content.get("1.0", "end-1c"))
+
+        # Salva o diário do dia atual, navega para outro menu e volta ao Diário do Dia:
+        # o cursor deve ir automaticamente para o final do texto
+        diary_view.save_current_entry(silent=True)
+        app.navigate_to("notes")
+        app.update()
+        app.navigate_to("diary")
+        app.update()
+        diary_view_reopened = app.active_view
+        tb_reopened = diary_view_reopened.txt_content._textbox
+        self.assertEqual(tb_reopened.index("insert"), tb_reopened.index("end-1c"))
 
         # Verifica configuração e execução do Backup Automático
         auto_backup_dir = os.path.join(self.temp_dir.name, "auto_backups")

@@ -511,6 +511,25 @@ class DiaryView(ctk.CTkFrame):
         self._update_counts()
         self._schedule_spellcheck()
 
+        # Quando já há conteúdo registrado, posiciona o cursor e rolagem no final do texto
+        if content:
+            tb = self.txt_content._textbox
+            tb.mark_set("insert", "end-1c")
+            tb.see("end-1c")
+            self.after(40, self._scroll_to_end_on_load)
+
+    def _scroll_to_end_on_load(self):
+        """Posiciona o cursor no final do texto e rola a visão após o carregamento da tela."""
+        try:
+            if not self.winfo_exists() or not self.txt_content.winfo_exists():
+                return
+            tb = self.txt_content._textbox
+            tb.mark_set("insert", "end-1c")
+            tb.see("end-1c")
+            tb.focus_set()
+        except Exception:
+            pass
+
     def _update_counts(self):
         text = self.txt_content.get("1.0", "end-1c")
         chars = len(text)
@@ -1042,8 +1061,8 @@ class DiaryView(ctk.CTkFrame):
     def _on_paste(self, event=None):
         """
         Trata a colagem de texto no Diário do Dia garantindo que o cursor vá para
-        o fim do texto, role a visualização para exibir a última informação colada
-        e registre um separador de Undo para que o Ctrl+Z desfaça exatamente o que foi colado.
+        o final do texto colado (e não para o final do arquivo), role a visualização
+        para exibir o fim da cópia e registre separador de Undo para Ctrl+Z.
         """
         text_widget = self.txt_content._textbox
         try:
@@ -1063,8 +1082,11 @@ class DiaryView(ctk.CTkFrame):
         if text_widget.tag_ranges("sel"):
             text_widget.delete("sel.first", "sel.last")
 
-        # Insere o texto colado na posição atual do cursor
-        text_widget.insert("insert", clipboard_text)
+        # Insere o texto colado na posição atual do cursor e posiciona o cursor ao final da cópia
+        start_pos = text_widget.index("insert")
+        text_widget.insert(start_pos, clipboard_text)
+        pasted_end = text_widget.index(f"{start_pos} + {len(clipboard_text)} chars")
+        text_widget.mark_set("insert", pasted_end)
 
         try:
             text_widget.edit_separator()
@@ -1073,25 +1095,25 @@ class DiaryView(ctk.CTkFrame):
 
         auto_highlight_content(self.txt_content)
 
-        # Move o cursor para o fim do texto e rola a visão até a última linha colada
-        text_widget.mark_set("insert", "end-1c")
-        text_widget.see("insert")
+        # Garante que o cursor permaneça no final da cópia e visível na tela
+        text_widget.mark_set("insert", pasted_end)
+        text_widget.see(pasted_end)
         text_widget.update_idletasks()
-        text_widget.see("end-1c")
+        text_widget.see(pasted_end)
         text_widget.focus_set()
 
         self._on_text_modified()
-        self.after(15, self._scroll_to_cursor_end)
+        self.after(15, lambda idx=pasted_end: self._scroll_to_pasted_end(idx))
         return "break"
 
-    def _scroll_to_cursor_end(self):
-        """Garante que após o cálculo de quebra de linhas (word wrap) a visão mostre o fim do texto."""
+    def _scroll_to_pasted_end(self, target_index: str):
+        """Garante que após o cálculo de quebra de linhas (word wrap) a visão mostre o final da cópia."""
         try:
             if not self.winfo_exists() or not self.txt_content.winfo_exists():
                 return
             text_widget = self.txt_content._textbox
-            text_widget.mark_set("insert", "end-1c")
-            text_widget.see("end-1c")
+            text_widget.mark_set("insert", target_index)
+            text_widget.see(target_index)
         except Exception:
             pass
 

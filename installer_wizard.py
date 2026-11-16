@@ -19,7 +19,7 @@ try:
 except ImportError:
     APP_NAME = "Diário de Anotações Inteligente"
     APP_SHORT_NAME = "Diário de Anotações"
-    APP_VERSION = "1.4.0"
+    APP_VERSION = "1.4.1"
     APP_PUBLISHER = "DAILYNotes"
 
 EXE_FILENAME = "DiarioAnotacoes.exe"
@@ -81,6 +81,30 @@ def resolve_initial_install_dir(argv=None) -> str:
         return existing
 
     return get_default_install_dir()
+
+
+def is_user_admin() -> bool:
+    """Retorna True se o processo atual já possui privilégios de administrador no Windows."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def can_write_to_dir(target_dir: str) -> bool:
+    """Testa se o processo atual tem permissão para criar e gravar arquivos em target_dir."""
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        probe = os.path.join(target_dir, ".dailynotes_write_test")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
 
 
 def get_clean_child_env() -> dict:
@@ -212,6 +236,9 @@ class InstallerWizardApp(tk.Tk):
         self.launch_after_var = tk.BooleanVar(value=True)
 
         self._build_ui()
+
+        if "--auto-install" in sys.argv[1:]:
+            self.after(250, self._run_installation)
 
     def _build_ui(self):
         # Cabeçalho
@@ -387,6 +414,38 @@ class InstallerWizardApp(tk.Tk):
         target_dir = self.install_dir_var.get().strip()
         if not target_dir:
             messagebox.showwarning("Aviso", "Informe uma pasta de destino para a instalação.")
+            return
+
+        # Se a pasta exigir privilégios administrativos (ex: C:\Program Files), eleva via UAC sob demanda
+        if not can_write_to_dir(target_dir):
+            if sys.platform == "win32" and not is_user_admin():
+                try:
+                    import ctypes
+                    if getattr(sys, "frozen", False):
+                        exe_to_run = sys.executable
+                        args_list = ["--install-dir", target_dir, "--auto-install"]
+                    else:
+                        exe_to_run = sys.executable
+                        args_list = [os.path.abspath(__file__), "--install-dir", target_dir, "--auto-install"]
+                    params = subprocess.list2cmdline(args_list)
+                    ret = ctypes.windll.shell32.ShellExecuteW(
+                        None,
+                        "runas",
+                        exe_to_run,
+                        params,
+                        os.path.dirname(os.path.abspath(exe_to_run)),
+                        1,
+                    )
+                    if ret > 32:
+                        self.destroy()
+                        return
+                except Exception:
+                    pass
+            messagebox.showerror(
+                "Permissão Necessária",
+                f"Não foi possível gravar na pasta:\n{target_dir}\n\n"
+                "Aceite a solicitação de Administrador ou escolha outra pasta.",
+            )
             return
 
         has_zip = os.path.isfile(self.bundled_zip)

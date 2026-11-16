@@ -110,7 +110,11 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
         lbl_safety.pack(fill="x", padx=14, pady=10)
 
         def _update_safety_wrap(event):
-            usable = max(260, event.width - 28)
+            try:
+                scaling = float(lbl_safety._get_widget_scaling()) or 1.0
+            except Exception:
+                scaling = 1.0
+            usable = max(240, int((event.width / scaling) - 36))
             if abs(int(lbl_safety.cget("wraplength") or 0) - usable) > 4:
                 lbl_safety.configure(wraplength=usable)
 
@@ -295,27 +299,8 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
                 current_install_dir = os.path.dirname(os.path.abspath(sys.executable))
                 cmd_args.extend(["--install-dir", current_install_dir])
 
-            launched = False
-            if sys.platform == "win32":
-                try:
-                    import ctypes
-                    params = subprocess.list2cmdline(cmd_args) if cmd_args else ""
-                    ret = ctypes.windll.shell32.ShellExecuteW(
-                        None,
-                        "runas",
-                        os.path.abspath(installer_path),
-                        params,
-                        os.path.dirname(os.path.abspath(installer_path)),
-                        1,
-                    )
-                    if ret > 32:
-                        launched = True
-                except Exception:
-                    launched = False
-
-            if not launched:
-                # Fallback via Popen caso ShellExecuteW não seja usado
-                subprocess.Popen([installer_path] + cmd_args, close_fds=True)
+            # Dispara o instalador desvinculado (o próprio instalador solicita elevação UAC se necessário)
+            subprocess.Popen([installer_path] + cmd_args, close_fds=True)
 
             # Encerra o aplicativo atual para liberar arquivos em uso
             self.after(1000, lambda: sys.exit(0))

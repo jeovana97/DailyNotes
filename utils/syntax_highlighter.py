@@ -1,4 +1,5 @@
 import re
+import unicodedata
 import tkinter as tk
 from typing import Optional, Tuple, List, Callable
 import customtkinter as ctk
@@ -670,3 +671,128 @@ def auto_highlight_content(ctk_textbox: ctk.CTkTextbox) -> Optional[str]:
             return "XML+SQL"
     except Exception:
         return None
+
+
+def _normalize_with_map(text: str) -> Tuple[str, List[int]]:
+    """Normaliza o texto (sem acentos, minúsculo) preservando o mapeamento para o índice original."""
+    norm_chars: List[str] = []
+    pos_map: List[int] = []
+    for orig_idx, ch in enumerate(text):
+        decomposed = unicodedata.normalize("NFD", ch.lower())
+        for d in decomposed:
+            if unicodedata.category(d) != "Mn":
+                norm_chars.append(d)
+                pos_map.append(orig_idx)
+    return "".join(norm_chars), pos_map
+
+
+def find_query_spans(content: str, query: str) -> List[Tuple[int, int]]:
+    """
+    Localiza todas as ocorrências das palavras da pesquisa em `content`
+    (insensível a maiúsculas e acentuação), retornando lista ordenada de (start, end).
+    """
+    if not content or not query or not query.strip():
+        return []
+
+    terms = [t.strip() for t in query.split() if len(t.strip()) >= 2]
+    if not terms and query.strip():
+        terms = [query.strip()]
+
+    norm_content, pos_map = _normalize_with_map(content)
+    if not norm_content:
+        return []
+
+    raw_spans: List[Tuple[int, int]] = []
+    for term in terms:
+        norm_term, _ = _normalize_with_map(term)
+        if not norm_term:
+            continue
+        start_from = 0
+        tlen = len(norm_term)
+        while True:
+            idx = norm_content.find(norm_term, start_from)
+            if idx == -1:
+                break
+            orig_start = pos_map[idx]
+            orig_end = pos_map[idx + tlen - 1] + 1
+            raw_spans.append((orig_start, orig_end))
+            start_from = idx + tlen
+
+    if not raw_spans:
+        return []
+
+    raw_spans.sort(key=lambda s: (s[0], s[1]))
+    # Mescla/remove sobreposições mantendo ordem de leitura no texto
+    merged: List[Tuple[int, int]] = [raw_spans[0]]
+    for s, e in raw_spans[1:]:
+        prev_s, prev_e = merged[-1]
+        if s < prev_e:
+            if e > prev_e:
+                merged[-1] = (prev_s, e)
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def clear_search_highlights(ctk_textbox: ctk.CTkTextbox) -> None:
+    """Remove todos os destaques de busca do editor."""
+    try:
+        tb = ctk_textbox._textbox
+        tb.tag_remove("search_highlight", "1.0", "end")
+        tb.tag_remove("search_highlight_current", "1.0", "end")
+    except Exception:
+        pass
+
+
+def highlight_search_matches(ctk_textbox: ctk.CTkTextbox, query: str) -> List[Tuple[str, str]]:
+    """
+    Destaca todas as ocorrências da pesquisa no editor e retorna a lista ordenada
+    de pares de índices Tkinter (start_idx, end_idx) para navegação com F3.
+    """
+    matches: List[Tuple[str, str]] = []
+    try:
+        tb = ctk_textbox._textbox
+        tb.tag_configure("search_highlight", background="#F59E0B", foreground="#0F172A")
+        tb.tag_configure("search_highlight_current", background="#EA580C", foreground="#FFFFFF")
+        tb.tag_remove("search_highlight", "1.0", "end")
+        tb.tag_remove("search_highlight_current", "1.0", "end")
+
+        content = tb.get("1.0", "end-1c")
+        spans = find_query_spans(content, query)
+        for s_off, e_off in spans:
+            s_idx = tb.index(f"1.0 + {s_off} chars")
+            e_idx = tb.index(f"1.0 + {e_off} chars")
+            tb.tag_add("search_highlight", s_idx, e_idx)
+            matches.append((s_idx, e_idx))
+
+        tb.tag_raise("search_highlight")
+        tb.tag_raise("search_highlight_current")
+    except Exception:
+        pass
+    return matches
+
+
+def focus_search_match(
+    ctk_textbox: ctk.CTkTextbox,
+    matches: List[Tuple[str, str]],
+    index: int,
+) -> int:
+    """
+    Destaca a ocorrência `index` como ativa, move o cursor até ela e rola o texto
+    para que fique visível. Retorna o índice normalizado.
+    """
+    if not matches:
+        return -1
+    idx = index % len(matches)
+    try:
+        tb = ctk_textbox._textbox
+        tb.tag_remove("search_highlight_current", "1.0", "end")
+        s_idx, e_idx = matches[idx]
+        tb.tag_add("search_highlight_current", s_idx, e_idx)
+        tb.tag_raise("search_highlight_current")
+        tb.mark_set("insert", s_idx)
+        tb.see(s_idx)
+        tb.see(e_idx)
+    except Exception:
+        pass
+    return idx

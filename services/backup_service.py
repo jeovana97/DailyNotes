@@ -576,12 +576,30 @@ class BackupService:
             os.makedirs(os.path.dirname(os.path.abspath(target_csv_path)), exist_ok=True)
 
             with open(target_csv_path, "w", newline="", encoding="utf-8-sig") as csvfile:
-                fieldnames = ["Data", "Usuário", "Nome Completo", "Trecho Encontrado", "Última Alteração", "Conteúdo Completo"]
+                fieldnames = [
+                    "Origem",
+                    "Título / Pasta",
+                    "Data",
+                    "Usuário",
+                    "Nome Completo",
+                    "Trecho Encontrado",
+                    "Última Alteração",
+                    "Conteúdo Completo",
+                ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=";")
                 writer.writeheader()
 
                 for item in search_results:
+                    is_note = item.get("source_type") == "note"
+                    origin_label = "Pasta e Arquivos" if is_note else "Diário"
+                    title_or_folder = (
+                        f"{item.get('folder_path', 'Raiz')} / {item.get('title', '')}"
+                        if is_note
+                        else f"Diário ({format_date_br(item.get('entry_date', ''))})"
+                    )
                     writer.writerow({
+                        "Origem": origin_label,
+                        "Título / Pasta": title_or_folder,
                         "Data": format_date_br(item.get("entry_date", "")),
                         "Usuário": item.get("username", ""),
                         "Nome Completo": item.get("full_name", ""),

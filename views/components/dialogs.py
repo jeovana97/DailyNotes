@@ -17,7 +17,25 @@ from utils.syntax_highlighter import (
     perform_undo,
     perform_redo,
     reset_undo_stack,
+    highlight_search_matches,
+    focus_search_match,
+    clear_search_highlights,
 )
+
+
+def _fit_modal_height(win, parent, width: int, min_height: int, max_height: int = 580):
+    """Ajusta a altura do modal ao conteúdo real sem esmagar os botões inferiores."""
+    try:
+        win.update_idletasks()
+        try:
+            scaling = float(win._get_window_scaling()) or 1.0
+        except Exception:
+            scaling = 1.0
+        req_h = int(win.winfo_reqheight() / scaling) + 12
+        final_h = max(min_height, min(max_height, req_h))
+        center_modal_on_parent(win, parent, width, final_h)
+    except Exception:
+        pass
 
 
 class UnsavedChangesDialog(ctk.CTkToplevel):
@@ -30,14 +48,14 @@ class UnsavedChangesDialog(ctk.CTkToplevel):
     def __init__(self, parent, date_br: str, custom_message: Optional[str] = None):
         super().__init__(parent)
         self.title("Alterações Não Salvas")
-        self.geometry("450x230")
+        self.geometry("460x240")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
 
         self.result = "cancel"
 
-        center_modal_on_parent(self, parent, 450, 230)
+        center_modal_on_parent(self, parent, 460, 240)
 
         self.container = ctk.CTkFrame(
             self,
@@ -56,19 +74,6 @@ class UnsavedChangesDialog(ctk.CTkToplevel):
         )
         self.lbl_title.pack(pady=(15, 8))
 
-        msg_text = custom_message or (
-            f"A anotação do dia {date_br} possui alterações que ainda não foram salvas no banco de dados.\n\nO que você deseja fazer?"
-        )
-        self.lbl_msg = ctk.CTkLabel(
-            self.container,
-            text=msg_text,
-            font=ctk.CTkFont(size=13),
-            text_color=config.COLORS["text_dark"],
-            wraplength=390,
-            justify="center",
-        )
-        self.lbl_msg.pack(pady=5, padx=15)
-
         self.btn_frame = ctk.CTkFrame(self.container, fg_color="transparent")
         self.btn_frame.pack(side="bottom", fill="x", pady=(10, 15), padx=15)
 
@@ -76,6 +81,7 @@ class UnsavedChangesDialog(ctk.CTkToplevel):
             self.btn_frame,
             text="💾 Salvar",
             width=110,
+            height=34,
             fg_color=config.COLORS["success"],
             hover_color=config.COLORS["success_hover"],
             text_color="#FFFFFF",
@@ -87,6 +93,7 @@ class UnsavedChangesDialog(ctk.CTkToplevel):
             self.btn_frame,
             text="🗑️ Descartar",
             width=110,
+            height=34,
             fg_color=config.COLORS["danger"],
             hover_color=config.COLORS["danger_hover"],
             text_color="#FFFFFF",
@@ -98,6 +105,7 @@ class UnsavedChangesDialog(ctk.CTkToplevel):
             self.btn_frame,
             text="Cancelar",
             width=90,
+            height=34,
             fg_color=config.COLORS["card_dark_alt"],
             hover_color=config.COLORS["border_dark"],
             text_color=config.COLORS["button_text"],
@@ -105,6 +113,20 @@ class UnsavedChangesDialog(ctk.CTkToplevel):
         )
         self.btn_cancel.pack(side="right", padx=5)
 
+        msg_text = custom_message or (
+            f"A anotação do dia {date_br} possui alterações que ainda não foram salvas no banco de dados.\n\nO que você deseja fazer?"
+        )
+        self.lbl_msg = ctk.CTkLabel(
+            self.container,
+            text=msg_text,
+            font=ctk.CTkFont(size=13),
+            text_color=config.COLORS["text_dark"],
+            wraplength=400,
+            justify="center",
+        )
+        self.lbl_msg.pack(pady=5, padx=15, expand=True)
+
+        _fit_modal_height(self, parent, 460, min_height=230)
         self.wait_window(self)
 
     def _on_save(self):
@@ -125,14 +147,14 @@ class MessageDialog(ctk.CTkToplevel):
     def __init__(self, parent, title: str, message: str, kind: str = "info", show_cancel: bool = False):
         super().__init__(parent)
         self.title(title)
-        self.geometry("420x210")
+        self.geometry("460x220")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
 
         self.result = False
 
-        center_modal_on_parent(self, parent, 420, 210)
+        center_modal_on_parent(self, parent, 460, 220)
 
         self.container = ctk.CTkFrame(
             self,
@@ -159,24 +181,16 @@ class MessageDialog(ctk.CTkToplevel):
         )
         self.lbl_title.pack(pady=(15, 8))
 
-        self.lbl_msg = ctk.CTkLabel(
-            self.container,
-            text=message,
-            font=ctk.CTkFont(size=13),
-            text_color=config.COLORS["text_dark"],
-            wraplength=370,
-            justify="center",
-        )
-        self.lbl_msg.pack(pady=5, padx=15, expand=True)
-
+        # Empacota os botões primeiro com side="bottom" para garantir altura integral
         self.btn_frame = ctk.CTkFrame(self.container, fg_color="transparent")
-        self.btn_frame.pack(side="bottom", pady=(5, 15))
+        self.btn_frame.pack(side="bottom", pady=(8, 15))
 
         if show_cancel:
             self.btn_confirm = ctk.CTkButton(
                 self.btn_frame,
                 text="Confirmar",
-                width=100,
+                width=110,
+                height=34,
                 fg_color=color if kind in ("danger", "success") else config.COLORS["primary"],
                 hover_color=config.COLORS["primary_hover"],
                 text_color="#FFFFFF",
@@ -187,7 +201,8 @@ class MessageDialog(ctk.CTkToplevel):
             self.btn_cancel = ctk.CTkButton(
                 self.btn_frame,
                 text="Cancelar",
-                width=100,
+                width=110,
+                height=34,
                 fg_color=config.COLORS["card_dark_alt"],
                 hover_color=config.COLORS["border_dark"],
                 text_color=config.COLORS["button_text"],
@@ -199,6 +214,7 @@ class MessageDialog(ctk.CTkToplevel):
                 self.btn_frame,
                 text="OK",
                 width=120,
+                height=34,
                 fg_color=config.COLORS["primary"],
                 hover_color=config.COLORS["primary_hover"],
                 text_color="#FFFFFF",
@@ -206,6 +222,17 @@ class MessageDialog(ctk.CTkToplevel):
             )
             self.btn_ok.pack()
 
+        self.lbl_msg = ctk.CTkLabel(
+            self.container,
+            text=message,
+            font=ctk.CTkFont(size=13),
+            text_color=config.COLORS["text_dark"],
+            wraplength=400,
+            justify="center",
+        )
+        self.lbl_msg.pack(pady=5, padx=15, expand=True)
+
+        _fit_modal_height(self, parent, 460, min_height=210)
         self.wait_window(self)
 
     def _confirm(self):
@@ -251,6 +278,8 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self.date_iso = date_iso
         self.author_label = author_label
         self.highlight_query = (highlight_query or "").strip()
+        self._search_matches = []
+        self._current_match_idx = -1
         self.on_entry_saved = on_entry_saved
         self.on_open_in_diary = on_open_in_diary
 
@@ -587,6 +616,25 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         )
         self.lbl_counts.pack(side="right", padx=14, pady=5)
 
+        self.btn_next_match = ctk.CTkButton(
+            self.status_bar,
+            text="",
+            width=120,
+            height=24,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=config.COLORS["warning"],
+            hover_color=config.COLORS["primary"],
+            text_color="#0F172A",
+            command=self._next_search_match,
+        )
+
+        # Vincula F3 / Shift+F3 para navegar entre ocorrências da palavra-chave
+        self.bind("<F3>", lambda e: (self._next_search_match(), "break")[1])
+        self.bind("<Shift-F3>", lambda e: (self._prev_search_match(), "break")[1])
+        self.txt_content._textbox.bind("<F3>", lambda e: (self._next_search_match(), "break")[1])
+        self.txt_content._textbox.bind("<Shift-F3>", lambda e: (self._prev_search_match(), "break")[1])
+
     def _update_meta_and_counts(self, current_text: str):
         words = len(current_text.split()) if current_text.strip() else 0
         chars = len(current_text)
@@ -714,36 +762,58 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
 
     def _highlight_search_terms(self, query: str):
         try:
-            tb = self.txt_content._textbox
-            tb.tag_remove("search_highlight", "1.0", "end")
-            terms = [t.strip() for t in query.split() if len(t.strip()) >= 2]
-            if not terms and query.strip():
-                terms = [query.strip()]
-            first_match_pos = None
-            for term in terms:
-                start_pos = "1.0"
-                while True:
-                    pos = tb.search(term, start_pos, stopindex="end", nocase=True)
-                    if not pos:
-                        break
-                    end_pos = f"{pos}+{len(term)}c"
-                    tb.tag_add("search_highlight", pos, end_pos)
-                    if first_match_pos is None:
-                        first_match_pos = pos
-                    start_pos = end_pos
-            if first_match_pos:
-                tb.see(first_match_pos)
+            self._search_matches = highlight_search_matches(self.txt_content, query)
+            if self._search_matches:
+                self._current_match_idx = focus_search_match(
+                    self.txt_content, self._search_matches, 0
+                )
+            else:
+                self._current_match_idx = -1
+            self._update_match_indicator()
         except Exception:
             pass
+
+    def _update_match_indicator(self):
+        if hasattr(self, "btn_next_match"):
+            if self._search_matches and self._current_match_idx >= 0:
+                total = len(self._search_matches)
+                curr = self._current_match_idx + 1
+                self.btn_next_match.configure(text=f"🔍 {curr}/{total} (F3 ▸)")
+                self.btn_next_match.pack(side="right", padx=(0, 8), pady=5)
+            else:
+                self.btn_next_match.pack_forget()
+
+    def _next_search_match(self):
+        if not self.highlight_query:
+            return
+        if not self._search_matches or self.is_editing:
+            self._search_matches = highlight_search_matches(self.txt_content, self.highlight_query)
+            if not self._search_matches:
+                self._current_match_idx = -1
+                self._update_match_indicator()
+                return
+        next_idx = 0 if self._current_match_idx < 0 else (self._current_match_idx + 1) % len(self._search_matches)
+        self._current_match_idx = focus_search_match(self.txt_content, self._search_matches, next_idx)
+        self._update_match_indicator()
+
+    def _prev_search_match(self):
+        if not self.highlight_query:
+            return
+        if not self._search_matches or self.is_editing:
+            self._search_matches = highlight_search_matches(self.txt_content, self.highlight_query)
+            if not self._search_matches:
+                self._current_match_idx = -1
+                self._update_match_indicator()
+                return
+        prev_idx = (len(self._search_matches) - 1) if self._current_match_idx <= 0 else (self._current_match_idx - 1)
+        self._current_match_idx = focus_search_match(self.txt_content, self._search_matches, prev_idx)
+        self._update_match_indicator()
 
     def _enable_edit_mode(self):
         """Ativa o modo de edição na própria janela."""
         self.is_editing = True
         self.txt_content.configure(state="normal")
-        try:
-            self.txt_content._textbox.tag_remove("search_highlight", "1.0", "end")
-        except Exception:
-            pass
+        clear_search_highlights(self.txt_content)
 
         self.title(f"Editando Anotação - {self.date_br}")
         self.lbl_mode_badge.configure(

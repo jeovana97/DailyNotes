@@ -24,6 +24,9 @@ from utils.syntax_highlighter import (
     perform_undo,
     perform_redo,
     reset_undo_stack,
+    highlight_search_matches,
+    focus_search_match,
+    clear_search_highlights,
 )
 
 
@@ -641,6 +644,7 @@ class NotesView(ctk.CTkFrame):
         import_service: Optional[ImportService] = None,
         initial_folder_id: Optional[int] = None,
         initial_note_id: Optional[int] = None,
+        highlight_query: Optional[str] = None,
     ):
         super().__init__(master, fg_color="transparent")
         self.current_user = current_user
@@ -656,6 +660,9 @@ class NotesView(ctk.CTkFrame):
         self.selected_folder_id: Optional[int] = initial_folder_id
         self.expanded_folders: Set[int] = set()
         self._initial_expansion_done = False
+        self.highlight_query: str = (highlight_query or "").strip()
+        self._search_matches: List[Tuple[str, str]] = []
+        self._current_match_idx: int = -1
 
         # Mapeamento do combo de pastas no editor
         self.editor_folder_options: List[Tuple[Optional[int], str]] = []
@@ -675,19 +682,23 @@ class NotesView(ctk.CTkFrame):
         self._refresh_tree()
 
         if initial_note_id is not None:
-            self.load_note(initial_note_id)
+            self.load_note(initial_note_id, preserve_highlight=bool(self.highlight_query))
         else:
             self._prepare_blank_note(folder_id=initial_folder_id)
 
-        # Vincula atalho Ctrl+S
+        # Vincula atalho Ctrl+S e F3 / Shift+F3
         self.txt_content.bind("<Control-s>", lambda e: (self.save_current_note(), "break")[1])
         self.txt_content.bind("<Control-S>", lambda e: (self.save_current_note(), "break")[1])
+        self.txt_content._textbox.bind("<F3>", lambda e: (self._next_search_match(), "break")[1])
+        self.txt_content._textbox.bind("<Shift-F3>", lambda e: (self._prev_search_match(), "break")[1])
         self.entry_title.bind("<Control-s>", lambda e: (self.save_current_note(), "break")[1])
         self.entry_title.bind("<Control-S>", lambda e: (self.save_current_note(), "break")[1])
         try:
             top = self.winfo_toplevel()
             top.bind("<Control-s>", lambda e: (self._on_ctrl_s_global(), "break")[1])
             top.bind("<Control-S>", lambda e: (self._on_ctrl_s_global(), "break")[1])
+            top.bind("<F3>", lambda e: (self._next_search_match(), "break")[1])
+            top.bind("<Shift-F3>", lambda e: (self._prev_search_match(), "break")[1])
         except Exception:
             pass
 
@@ -1812,8 +1823,13 @@ class NotesView(ctk.CTkFrame):
             return
         self.load_note(note.id)
 
-    def load_note(self, note_id: int) -> bool:
+    def load_note(self, note_id: int, preserve_highlight: bool = False) -> bool:
         """Carrega uma nota salva pelo ID no editor."""
+        if not preserve_highlight:
+            self.highlight_query = ""
+            self._search_matches = []
+            self._current_match_idx = -1
+
         if self.autosave_timer_id:
             self.after_cancel(self.autosave_timer_id)
             self.autosave_timer_id = None
@@ -1848,7 +1864,49 @@ class NotesView(ctk.CTkFrame):
             self._suppress_change_events = False
 
         self._refresh_tree()
+        if preserve_highlight and self.highlight_query:
+            self._apply_search_highlights()
+        else:
+            clear_search_highlights(self.txt_content)
         return True
+
+    def _apply_search_highlights(self):
+        if not self.highlight_query:
+            return
+        self._search_matches = highlight_search_matches(self.txt_content, self.highlight_query)
+        if self._search_matches:
+            self._current_match_idx = focus_search_match(self.txt_content, self._search_matches, 0)
+            self.lbl_save_status.configure(
+                text=f"🔍 {self._current_match_idx + 1}/{len(self._search_matches)} (F3: Próxima)",
+                text_color=config.COLORS["warning"],
+            )
+            self.txt_content.focus_set()
+
+    def _next_search_match(self):
+        if not self.winfo_exists() or not self.highlight_query:
+            return
+        self._search_matches = highlight_search_matches(self.txt_content, self.highlight_query)
+        if not self._search_matches:
+            return
+        next_idx = 0 if self._current_match_idx < 0 else (self._current_match_idx + 1) % len(self._search_matches)
+        self._current_match_idx = focus_search_match(self.txt_content, self._search_matches, next_idx)
+        self.lbl_save_status.configure(
+            text=f"🔍 {self._current_match_idx + 1}/{len(self._search_matches)} (F3: Próxima)",
+            text_color=config.COLORS["warning"],
+        )
+
+    def _prev_search_match(self):
+        if not self.winfo_exists() or not self.highlight_query:
+            return
+        self._search_matches = highlight_search_matches(self.txt_content, self.highlight_query)
+        if not self._search_matches:
+            return
+        prev_idx = (len(self._search_matches) - 1) if self._current_match_idx <= 0 else (self._current_match_idx - 1)
+        self._current_match_idx = focus_search_match(self.txt_content, self._search_matches, prev_idx)
+        self.lbl_save_status.configure(
+            text=f"🔍 {self._current_match_idx + 1}/{len(self._search_matches)} (F3: Próxima)",
+            text_color=config.COLORS["warning"],
+        )
 
     def _on_folder_combo_changed(self, _selected_label: str):
         if self._suppress_change_events:

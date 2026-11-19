@@ -320,6 +320,18 @@ class AuthenticationService:
         finally:
             conn.close()
 
+    def list_active_login_options(self) -> List[Tuple[str, str]]:
+        """Retorna lista de (username, full_name) dos usuários ativos para troca rápida de conta."""
+        conn = get_connection(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT username, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC"
+            )
+            return [(row["username"], row["full_name"]) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
     def update_user_permissions(
         self,
         requester: User,

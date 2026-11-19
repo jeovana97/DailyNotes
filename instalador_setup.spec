@@ -15,6 +15,10 @@ if os.path.exists(payload_zip):
 if os.path.exists('assets'):
     datas.append(('assets', 'assets'))
 
+# Inclui o arquivo VERSION como fonte única de versão
+if os.path.exists('VERSION'):
+    datas.append(('VERSION', '.'))
+
 a = Analysis(
     ['installer_wizard.py'],
     pathex=['.'],

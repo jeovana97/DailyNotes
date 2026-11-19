@@ -1,5 +1,7 @@
 # Diário de Anotações Inteligente (DailyNotes) 📓
 
+**Versão atual:** `1.5.0`
+
 O **Diário de Anotações Inteligente (DailyNotes)** é um sistema desktop completo para Windows, desenvolvido em **Python** e **CustomTkinter**, projetado para centralizar, organizar e consultar tanto **anotações diárias por data** quanto **notas técnicas/permanentes organizadas em pastas e subpastas**.
 
 Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rápida, segura e indexada, oferecendo pesquisa instantânea insensível a maiúsculas e acentuação, corretor ortográfico nativo do Windows com dicionário gerenciável, backup automático agendado e assistente de instalação próprio para Windows.
@@ -34,13 +36,14 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **Painel com Filtros Inteligentes:** Alterne facilmente entre abas: **Pendentes**, **Hoje**, **Atrasados**, **Notificados**, **Concluídos** e **Todos**, com barra de busca em tempo real por assunto ou conteúdo.
 - **Ações Rápidas:** Botões para **✔️ Concluir** (ou **↩️ Reabrir**), **✏️ Editar**, **📝 Abrir no Diário** da data e **🔔 Testar Aviso** para verificar as notificações do Windows imediatamente.
 
-### 4. 🔍 Pesquisa Avançada no Diário
-- **Busca Instantânea (FTS5 + Normalização):** Localiza qualquer palavra ou expressão nas anotações do diário, ignorando diferenças entre maiúsculas/minúsculas e acentuação (ex: buscar `sessao` encontra `sessão`).
-- **Filtros Combinados:** Filtre por **Data Inicial**, **Data Final**, **Data Exata**, **Ordenação** (mais recentes ou mais antigas) e **Usuário** (para administradores com permissão).
+### 4. 🔍 Pesquisa Avançada (Diário, Pastas e Arquivos)
+- **Busca Instantânea Unificada:** Localiza qualquer palavra ou expressão no **Diário**, em **Pastas e Arquivos** ou em ambos simultaneamente, ignorando diferenças entre maiúsculas/minúsculas e acentuação (ex: buscar `sessao` encontra `sessão`).
+- **Identificação de Origem e Navegação `F3`:** Cada resultado exibe claramente se pertence ao **📔 Diário** ou a **📁 Pasta & Arquivos** (com caminho da pasta e título). Ao abrir o documento, todas as palavras-chave ficam destacadas e é possível navegar entre as ocorrências usando **`F3`** (próxima) e **`Shift+F3`** (anterior).
+- **Filtros Combinados:** Filtre por **Escopo**, **Data Inicial**, **Data Final**, **Data Exata**, **Ordenação** (mais recentes ou mais antigas) e **Usuário** (para administradores com permissão).
 - **Janela de Visualização (Somente Leitura) com Opção de Edição:**
-  - Ao clicar em **📖 Abrir Anotação (Leitura)** ou dar duplo clique em um resultado, o sistema **não sai da tela de pesquisa**: abre uma janela dedicada em modo **🔒 Somente Leitura** com os termos pesquisados destacados no texto.
-  - Caso deseje alterar a anotação, basta clicar no botão **✏️ Editar Nota** na própria janela (habilitando o botão **💾 Salvar Alterações**) ou clicar em **📝 Abrir no Diário do Dia**.
-- **Exportação para Excel (CSV):** Exporte a lista de resultados filtrados para um arquivo `.csv` (UTF-8 com BOM).
+  - Ao clicar em **📖 Abrir Anotação (Leitura)** ou dar duplo clique em um resultado do diário, o sistema abre uma janela dedicada em modo **🔒 Somente Leitura** com os termos destacados e navegação `F3`; para resultados de pasta, abre diretamente na pasta correspondente em **Notas & Pastas** também com destaque e `F3`.
+  - Caso deseje alterar a anotação do diário, basta clicar em **✏️ Editar Nota** na própria janela ou em **📝 Abrir no Diário do Dia**.
+- **Exportação para Excel (CSV):** Exporte a lista de resultados filtrados para um arquivo `.csv` (UTF-8 com BOM), incluindo a origem (`Diário` ou `Pasta e Arquivos`) e o caminho/título.
 
 ### 5. 📅 Histórico & Calendário
 - **Calendário Mensal Interativo:** Destaca visualmente todos os dias do mês que possuem anotações registradas.
@@ -125,10 +128,23 @@ python -m unittest discover -s tests
 
 ---
 
+## 🏷️ Controle de Versão
+
+Este projeto segue o padrão **Semantic Versioning (`MAJOR.MINOR.PATCH`)** e **Conventional Commits**:
+
+- **`VERSION`**: Armazena a versão atual do aplicativo como fonte única de verdade.
+- **`CHANGELOG.md`**: Mantém o histórico completo das versões por data e categoria (`Added`, `Changed`, `Fixed`, `Removed`, `Security`).
+- **`version.py`**: Lê dinamicamente o arquivo `VERSION` para exibição na interface e verificação de atualizações via GitHub Releases.
+
+---
+
 ## 📂 Estrutura de Diretórios
 
 ```text
 DAILYNotes/
+├── VERSION                         # Versão atual do aplicativo (SemVer)
+├── CHANGELOG.md                    # Histórico completo de versões e alterações
+├── version.py                      # Leitor centralizado de versão e URLs do GitHub
 ├── main.py                         # Ponto de entrada principal da aplicação
 ├── config.py                       # Configurações gerais, caminhos e paleta de temas
 ├── build_exe.py                    # Gerador automatizado do executável e do instalador Windows

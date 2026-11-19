@@ -107,6 +107,79 @@ class TestSearchService(unittest.TestCase):
         results_admin = self.search_service.search_diaries(requester=self.admin, query="cliente")
         self.assertEqual(len(results_admin), 2)
 
+    def test_search_notes_and_unified_scope(self):
+        from services.note_service import NoteService
+
+        note_svc = NoteService(db_path=self.db_path)
+        f_fin = note_svc.create_folder(self.user1.id, "Financeiro")
+        f_sub = note_svc.create_folder(self.user1.id, "Scripts Banco", parent_id=f_fin.id)
+
+        note_svc.save_note(
+            user_id=self.user1.id,
+            title="titulos_excluidos.sql",
+            content="SELECT * FROM titulos WHERE status = 'EXCLUIDO' AND nota_emissao = 'NFe';",
+            folder_id=f_sub.id,
+        )
+
+        # Busca por termo que existe no diário ("emissão") e na pasta ("nota_emissao" / conteúdo)
+        res_all = self.search_service.search_all(requester=self.user1, query="emissao", scope="all")
+        origins = {r["source_type"] for r in res_all}
+        self.assertEqual(origins, {"diary", "note"})
+
+        # Escopo somente pastas e arquivos
+        res_notes = self.search_service.search_all(requester=self.user1, query="titulos", scope="notes")
+        self.assertEqual(len(res_notes), 1)
+        self.assertEqual(res_notes[0]["source_type"], "note")
+        self.assertEqual(res_notes[0]["folder_path"], "Financeiro / Scripts Banco")
+        self.assertEqual(res_notes[0]["title"], "titulos_excluidos.sql")
+
+        # Escopo somente diário
+        res_diaries = self.search_service.search_all(requester=self.user1, query="titulos", scope="diaries")
+        self.assertEqual(len(res_diaries), 0)
+
+    def test_highlight_spans_and_f3_navigation(self):
+        from utils.syntax_highlighter import find_query_spans
+        from views.components.dialogs import DiaryNoteReaderDialog
+        import customtkinter as ctk
+
+        sample = (
+            "LINK PORTAL NACIONAL SERVIÇO: https://www.nfse.gov.br/EmissorNacional/Login\n"
+            "Emissão nacional concluída no portal."
+        )
+        spans = find_query_spans(sample, "portal nacional")
+        # Deve encontrar: PORTAL, NACIONAL, Nacional, nacional, portal (5 ocorrências em ordem)
+        matched_words = [sample[s:e] for s, e in spans]
+        self.assertEqual(matched_words, ["PORTAL", "NACIONAL", "Nacional", "nacional", "portal"])
+
+        # Valida navegação F3 no DiaryNoteReaderDialog
+        self.diary_service.save_entry(self.user1.id, "2026-11-16", sample)
+        root = ctk.CTk()
+        root.withdraw()
+        try:
+            dlg = DiaryNoteReaderDialog(
+                parent=root,
+                diary_service=self.diary_service,
+                user_id=self.user1.id,
+                date_iso="2026-11-16",
+                highlight_query="portal nacional",
+            )
+            dlg.update()
+            self.assertEqual(len(dlg._search_matches), 5)
+            self.assertEqual(dlg._current_match_idx, 0)
+            self.assertIn("1/5", dlg.btn_next_match.cget("text"))
+
+            # F3 -> próximo
+            dlg._next_search_match()
+            self.assertEqual(dlg._current_match_idx, 1)
+            self.assertIn("2/5", dlg.btn_next_match.cget("text"))
+
+            # Shift+F3 -> anterior
+            dlg._prev_search_match()
+            self.assertEqual(dlg._current_match_idx, 0)
+            dlg.destroy()
+        finally:
+            root.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

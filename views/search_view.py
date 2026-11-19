@@ -29,6 +29,7 @@ class SearchView(ctk.CTkFrame):
         backup_service: BackupService,
         on_open_diary_date: Callable[[str, Optional[int]], None],
         diary_service: Optional[DiaryService] = None,
+        on_open_folder_note: Optional[Callable[[Optional[int], Optional[int]], None]] = None,
     ):
         super().__init__(master, fg_color="transparent")
         self.current_user = current_user
@@ -37,6 +38,7 @@ class SearchView(ctk.CTkFrame):
         self.backup_service = backup_service
         self.on_open_diary_date = on_open_diary_date
         self.diary_service = diary_service or DiaryService(db_path=self.search_service.db_path)
+        self.on_open_folder_note = on_open_folder_note
 
         self.results: List[Dict[str, Any]] = []
         self.selected_index: int = -1
@@ -61,11 +63,34 @@ class SearchView(ctk.CTkFrame):
 
         self.lbl_title = ctk.CTkLabel(
             self.header_frame,
-            text="🔍 Pesquisa Avançada no Diário",
+            text="🔍 Pesquisa Avançada (Diário, Pastas e Arquivos)",
             font=ctk.CTkFont(size=18, weight="bold"),
             text_color=config.COLORS["text_dark"],
         )
         self.lbl_title.pack(side="left")
+
+        # Seletor de onde pesquisar (Diário e Pastas / Somente Diário / Pastas e Arquivos)
+        self.scope_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        self.scope_frame.pack(side="right")
+
+        self.lbl_scope = ctk.CTkLabel(
+            self.scope_frame,
+            text="Pesquisar em:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLORS["text_muted"],
+        )
+        self.lbl_scope.pack(side="left", padx=(0, 6))
+
+        self.combo_scope = ctk.CTkComboBox(
+            self.scope_frame,
+            values=["Diário e Pastas", "Somente Diário", "Pastas e Arquivos"],
+            width=185,
+            height=30,
+            corner_radius=6,
+            command=lambda _v: self.execute_search() if self.entry_query.get().strip() else None,
+        )
+        self.combo_scope.set("Diário e Pastas")
+        self.combo_scope.pack(side="left")
 
         # Linha 1 de Filtros: Campo de Busca textual + Botões
         self.row1 = ctk.CTkFrame(self.filters_card, fg_color="transparent")
@@ -245,7 +270,9 @@ class SearchView(ctk.CTkFrame):
         self.results_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
 
         # Estado inicial vazio amigável
-        self._render_empty_state("Utilize a barra de pesquisa acima para encontrar qualquer informação no diário.")
+        self._render_empty_state(
+            "Utilize a barra de pesquisa acima para encontrar informações no Diário ou em Pastas e Arquivos."
+        )
 
     def _render_empty_state(self, message: str):
         for widget in self.results_scroll.winfo_children():
@@ -306,8 +333,16 @@ class SearchView(ctk.CTkFrame):
                         target_user_id = u.id
                         break
 
-        # Executa a busca
-        self.results = self.search_service.search_diaries(
+        scope_label = self.combo_scope.get()
+        if scope_label == "Somente Diário":
+            scope = "diaries"
+        elif scope_label == "Pastas e Arquivos":
+            scope = "notes"
+        else:
+            scope = "all"
+
+        # Executa a busca conforme o escopo selecionado
+        self.results = self.search_service.search_all(
             requester=self.current_user,
             query=query,
             start_date=start_iso,
@@ -315,6 +350,7 @@ class SearchView(ctk.CTkFrame):
             exact_date=exact_iso,
             target_user_id=target_user_id,
             order_desc=order_desc,
+            scope=scope,
         )
 
         self.selected_index = -1
@@ -346,6 +382,8 @@ class SearchView(ctk.CTkFrame):
 
         # Renderiza cada resultado em um card moderno
         for idx, item in enumerate(self.results):
+            is_note = (item.get("source_type") == "note")
+
             card = ctk.CTkFrame(
                 self.results_scroll,
                 corner_radius=10,
@@ -355,17 +393,39 @@ class SearchView(ctk.CTkFrame):
             )
             card.pack(fill="x", padx=10, pady=5)
 
-            # Cabeçalho do Card (Data, Usuário, Data de alteração)
+            # Cabeçalho do Card (Badge de Origem, Data/Título, Usuário, Data de alteração)
             header_row = ctk.CTkFrame(card, fg_color="transparent")
             header_row.pack(fill="x", padx=12, pady=(10, 4))
 
-            date_str = format_date_br(item["entry_date"])
-            lbl_date = ctk.CTkLabel(
+            origin_badge = ctk.CTkLabel(
                 header_row,
-                text=f"📅 {date_str}",
-                font=ctk.CTkFont(size=14, weight="bold"),
-                text_color=config.COLORS["text_dark"],
+                text="📁 Pasta & Arquivos" if is_note else "📔 Diário",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color=config.COLORS["secondary"] if is_note else config.COLORS["primary"],
+                text_color="#FFFFFF",
+                corner_radius=6,
+                padx=8,
+                pady=2,
             )
+            origin_badge.pack(side="left", padx=(0, 10))
+
+            if is_note:
+                folder_path = item.get("folder_path", "Raiz (Sem pasta)")
+                note_title = item.get("title", "Sem título")
+                lbl_date = ctk.CTkLabel(
+                    header_row,
+                    text=f"📄 {note_title}   •   📂 {folder_path}",
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                    text_color=config.COLORS["text_dark"],
+                )
+            else:
+                date_str = format_date_br(item["entry_date"])
+                lbl_date = ctk.CTkLabel(
+                    header_row,
+                    text=f"📅 {date_str}",
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    text_color=config.COLORS["text_dark"],
+                )
             lbl_date.pack(side="left")
 
             if self.current_user.can_view_other_diaries:
@@ -402,22 +462,54 @@ class SearchView(ctk.CTkFrame):
             footer_row = ctk.CTkFrame(card, fg_color="transparent")
             footer_row.pack(fill="x", padx=12, pady=(0, 10))
 
-            btn_open = ctk.CTkButton(
-                footer_row,
-                text="📖 Abrir Anotação (Leitura)",
-                width=185,
-                height=28,
-                corner_radius=6,
-                fg_color=config.COLORS["primary"],
-                hover_color=config.COLORS["primary_hover"],
-                text_color="#FFFFFF",
-                command=lambda d=item["entry_date"], uid=item["user_id"], it=item: self._open_result(d, uid, it),
-            )
+            if is_note:
+                btn_open = ctk.CTkButton(
+                    footer_row,
+                    text="📂 Abrir na Pasta",
+                    width=165,
+                    height=28,
+                    corner_radius=6,
+                    fg_color=config.COLORS["secondary"],
+                    hover_color=config.COLORS["secondary_hover"],
+                    text_color="#FFFFFF",
+                    command=lambda it=item: self._open_item(it),
+                )
+            else:
+                btn_open = ctk.CTkButton(
+                    footer_row,
+                    text="📖 Abrir Anotação (Leitura)",
+                    width=185,
+                    height=28,
+                    corner_radius=6,
+                    fg_color=config.COLORS["primary"],
+                    hover_color=config.COLORS["primary_hover"],
+                    text_color="#FFFFFF",
+                    command=lambda it=item: self._open_item(it),
+                )
             btn_open.pack(side="right")
 
-            # Duplo clique no card ou no trecho abre a anotação em janela de leitura
-            card.bind("<Double-Button-1>", lambda e, d=item["entry_date"], uid=item["user_id"], it=item: self._open_result(d, uid, it))
-            lbl_snippet.bind("<Double-Button-1>", lambda e, d=item["entry_date"], uid=item["user_id"], it=item: self._open_result(d, uid, it))
+            # Duplo clique no card ou no trecho abre o item correspondente
+            card.bind("<Double-Button-1>", lambda e, it=item: self._open_item(it))
+            lbl_snippet.bind("<Double-Button-1>", lambda e, it=item: self._open_item(it))
+
+    def _open_item(self, item: Dict[str, Any]):
+        """Abre um resultado do Diário ou de Pastas & Arquivos conforme sua origem."""
+        if item.get("source_type") == "note":
+            if self.on_open_folder_note is not None:
+                query = self.entry_query.get().strip()
+                try:
+                    self.on_open_folder_note(item.get("folder_id"), item.get("note_id"), highlight_query=query)
+                except TypeError:
+                    self.on_open_folder_note(item.get("folder_id"), item.get("note_id"))
+            else:
+                show_message(
+                    self,
+                    "Nota em Pasta",
+                    f"Nota: {item.get('title')}\nPasta: {item.get('folder_path')}",
+                    kind="info",
+                )
+        else:
+            self._open_result(item["entry_date"], item["user_id"], item)
 
     def _open_result(self, date_iso: str, user_id: int, item: Optional[Dict[str, Any]] = None):
         """Abre a anotação em uma janela exclusiva para leitura, com opção de editar."""
@@ -451,8 +543,7 @@ class SearchView(ctk.CTkFrame):
             self.selected_index = len(self.results) - 1
         else:
             self.selected_index -= 1
-        item = self.results[self.selected_index]
-        self._open_result(item["entry_date"], item["user_id"], item)
+        self._open_item(self.results[self.selected_index])
 
     def _on_next_result(self):
         if not self.results:
@@ -461,14 +552,14 @@ class SearchView(ctk.CTkFrame):
             self.selected_index = 0
         else:
             self.selected_index += 1
-        item = self.results[self.selected_index]
-        self._open_result(item["entry_date"], item["user_id"], item)
+        self._open_item(self.results[self.selected_index])
 
     def _clear_filters(self):
         self.entry_query.delete(0, "end")
         self.entry_start_date.delete(0, "end")
         self.entry_end_date.delete(0, "end")
         self.entry_exact_date.delete(0, "end")
+        self.combo_scope.set("Diário e Pastas")
         self.combo_order.set("Mais recentes primeiro")
         if self.combo_user_filter:
             self.combo_user_filter.set("Todos os usuários")

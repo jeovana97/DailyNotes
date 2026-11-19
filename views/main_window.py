@@ -29,6 +29,7 @@ from views.backup_view import BackupView
 from views.users_view import UsersView
 from views.components.dialogs import show_message, ask_confirmation
 from views.components.update_dialog import UpdateAvailableDialog
+from views.components.responsive_toolbar import WidgetTooltip
 from utils.syntax_highlighter import configure_syntax_tags
 from utils.window_utils import center_window_on_primary_screen, get_display_monitors, center_modal_on_parent
 
@@ -104,6 +105,181 @@ class SelfPasswordChangeDialog(ctk.CTkToplevel):
             show_message(self, "Erro", msg, kind="danger")
 
 
+class SwitchUserDialog(ctk.CTkToplevel):
+    """Modal compacto para troca rápida de usuário sem sair para a tela de login."""
+    def __init__(self, parent, current_user: User, auth_service: AuthenticationService):
+        super().__init__(parent)
+        self.title("Trocar Usuário")
+        self.geometry("420x310")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.current_user = current_user
+        self.auth_service = auth_service
+        self.selected_user: Optional[User] = None
+        center_modal_on_parent(self, parent, 420, 310)
+
+        self.container = ctk.CTkFrame(
+            self,
+            corner_radius=12,
+            fg_color=config.COLORS["card_dark"],
+            border_width=1,
+            border_color=config.COLORS["border_dark"],
+        )
+        self.container.pack(fill="both", expand=True, padx=15, pady=15)
+
+        self.lbl_title = ctk.CTkLabel(
+            self.container,
+            text="🔄 Troca Rápida de Usuário",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=config.COLORS["text_dark"],
+        )
+        self.lbl_title.pack(pady=(14, 4))
+
+        self.lbl_curr = ctk.CTkLabel(
+            self.container,
+            text=f"Conectado agora: {current_user.full_name} (@{current_user.username})",
+            font=ctk.CTkFont(size=11),
+            text_color=config.COLORS["text_muted"],
+        )
+        self.lbl_curr.pack(pady=(0, 12))
+
+        # Lista de usuários ativos
+        self._user_options = self.auth_service.list_active_login_options()
+        self._label_to_username = {
+            f"{full_name} (@{uname})": uname for uname, full_name in self._user_options
+        }
+        labels = list(self._label_to_username.keys())
+        if not labels:
+            labels = [f"{current_user.full_name} (@{current_user.username})"]
+            self._label_to_username[labels[0]] = current_user.username
+
+        lbl_u = ctk.CTkLabel(
+            self.container,
+            text="Selecione ou digite o usuário:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w",
+        )
+        lbl_u.pack(fill="x", padx=20, pady=(0, 4))
+
+        self.combo_user = ctk.CTkComboBox(
+            self.container,
+            values=labels,
+            height=36,
+            corner_radius=6,
+        )
+        # Pré-seleciona outro usuário diferente do atual se disponível
+        other_label = next(
+            (lbl for lbl, uname in self._label_to_username.items() if uname != current_user.username),
+            labels[0],
+        )
+        self.combo_user.set(other_label)
+        self.combo_user.pack(fill="x", padx=20, pady=(0, 10))
+
+        lbl_p = ctk.CTkLabel(
+            self.container,
+            text="Senha do usuário:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w",
+        )
+        lbl_p.pack(fill="x", padx=20, pady=(0, 4))
+
+        pass_row = ctk.CTkFrame(self.container, fg_color="transparent")
+        pass_row.pack(fill="x", padx=20, pady=(0, 6))
+
+        self.entry_pass = ctk.CTkEntry(
+            pass_row,
+            height=36,
+            placeholder_text="Digite a senha...",
+            show="•",
+            corner_radius=6,
+        )
+        self.entry_pass.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.entry_pass.bind("<Return>", lambda e: self._on_switch())
+
+        self._show_pw = False
+        self.btn_eye = ctk.CTkButton(
+            pass_row,
+            text="Ver",
+            width=46,
+            height=36,
+            corner_radius=6,
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+            command=self._toggle_pw,
+        )
+        self.btn_eye.pack(side="right")
+
+        self.lbl_error = ctk.CTkLabel(
+            self.container,
+            text="",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=config.COLORS["danger"],
+        )
+        self.lbl_error.pack(fill="x", padx=20, pady=(0, 8))
+
+        btn_row = ctk.CTkFrame(self.container, fg_color="transparent")
+        btn_row.pack(side="bottom", fill="x", padx=20, pady=(0, 14))
+
+        self.btn_confirm = ctk.CTkButton(
+            btn_row,
+            text="🔄 Trocar Agora",
+            height=36,
+            corner_radius=8,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=config.COLORS["primary"],
+            hover_color=config.COLORS["primary_hover"],
+            text_color="#FFFFFF",
+            command=self._on_switch,
+        )
+        self.btn_confirm.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_cancel = ctk.CTkButton(
+            btn_row,
+            text="Cancelar",
+            width=100,
+            height=36,
+            corner_radius=8,
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["button_text"],
+            command=self.destroy,
+        )
+        self.btn_cancel.pack(side="right")
+
+        self.after(80, lambda: self.entry_pass.focus_set() if self.winfo_exists() else None)
+        self.wait_window(self)
+
+    def _toggle_pw(self):
+        self._show_pw = not self._show_pw
+        self.entry_pass.configure(show="" if self._show_pw else "•")
+        self.btn_eye.configure(text="Ocultar" if self._show_pw else "Ver")
+
+    def _on_switch(self):
+        raw_val = self.combo_user.get().strip()
+        username = self._label_to_username.get(raw_val, raw_val)
+        password = self.entry_pass.get()
+
+        if not username:
+            self.lbl_error.configure(text="Selecione ou informe o usuário.")
+            return
+        if not password:
+            self.lbl_error.configure(text="Informe a senha do usuário.")
+            return
+
+        user, msg = self.auth_service.authenticate(username, password)
+        if user is None:
+            self.lbl_error.configure(text=msg or "Usuário ou senha inválidos.")
+            self.entry_pass.delete(0, "end")
+            self.entry_pass.focus_set()
+            return
+
+        self.selected_user = user
+        self.destroy()
+
+
 class MainWindow(ctk.CTk):
     """
     Janela principal da aplicação desktop Diário de Anotações Inteligente.
@@ -150,6 +326,9 @@ class MainWindow(ctk.CTk):
         self.current_user: Optional[User] = None
         self.active_view = None
         self.nav_buttons = {}
+        self._nav_items_meta = {}
+        self.sidebar_collapsed: bool = False
+        self._sidebar_tooltips = []
         self._auto_backup_timer_id = None
         self._reminder_timer_id = None
         self._toast_poll_timer_id = None
@@ -247,9 +426,10 @@ class MainWindow(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
 
         # 1. Barra Lateral (Sidebar)
+        sidebar_width = 76 if self.sidebar_collapsed else 240
         self.sidebar = ctk.CTkFrame(
             self,
-            width=240,
+            width=sidebar_width,
             corner_radius=0,
             fg_color=config.COLORS["sidebar"],
             border_width=1,
@@ -258,9 +438,9 @@ class MainWindow(ctk.CTk):
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
 
-        # Cabeçalho da Marca
+        # Cabeçalho da Marca + Botão de Recolher/Expandir Menu Lateral
         self.brand_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        self.brand_frame.pack(fill="x", padx=16, pady=(20, 15))
+        self.brand_frame.pack(fill="x", padx=8, pady=(14, 10))
 
         if os.path.isfile(config.ICON_PNG_PATH):
             try:
@@ -285,52 +465,89 @@ class MainWindow(ctk.CTk):
                 text="📓",
                 font=ctk.CTkFont(size=28),
             )
-        self.lbl_logo.pack(side="left", padx=(0, 10))
+        self.lbl_logo.pack(side="left", padx=(4, 8))
 
         self.lbl_app = ctk.CTkLabel(
             self.brand_frame,
             text="Diário de\nAnotações",
-            font=ctk.CTkFont(size=16, weight="bold"),
+            font=ctk.CTkFont(size=15, weight="bold"),
             text_color=config.COLORS["text_dark"],
             justify="left",
         )
-        self.lbl_app.pack(side="left")
+        self.lbl_app.pack(side="left", fill="x", expand=True)
+
+        self.btn_toggle_sidebar = ctk.CTkButton(
+            self.brand_frame,
+            text="▶" if self.sidebar_collapsed else "◀",
+            width=28,
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=self._toggle_sidebar,
+        )
+        self.btn_toggle_sidebar.pack(side="right", padx=(2, 0))
+        self._sidebar_tooltips = [
+            WidgetTooltip(self.btn_toggle_sidebar, "Expandir / Recolher menu lateral")
+        ]
+
+        # Área Rolável do Menu Lateral (para suportar janelas menores sem cortar opções)
+        self.sidebar_scroll = ctk.CTkScrollableFrame(
+            self.sidebar,
+            width=54 if self.sidebar_collapsed else 218,
+            fg_color="transparent",
+            corner_radius=0,
+            scrollbar_button_color=("#CBD5E1", "#334155"),
+            scrollbar_button_hover_color=("#94A3B8", "#475569"),
+        )
+        try:
+            self.sidebar_scroll._scrollbar.configure(width=6)
+        except Exception:
+            pass
+        self.sidebar_scroll.pack(fill="both", expand=True, padx=2, pady=(0, 6))
+        try:
+            self.sidebar_scroll._parent_canvas.bind("<Configure>", lambda _e: self.after(10, self._update_sidebar_scrollbar), add="+")
+            self.sidebar_scroll.bind("<Configure>", lambda _e: self.after(10, self._update_sidebar_scrollbar), add="+")
+        except Exception:
+            pass
 
         # Card do Usuário Logado
         self.user_card = ctk.CTkFrame(
-            self.sidebar,
+            self.sidebar_scroll,
             corner_radius=10,
             fg_color=config.COLORS["card_dark"],
             border_width=1,
             border_color=config.COLORS["border_dark"],
         )
-        self.user_card.pack(fill="x", padx=14, pady=(0, 18))
+        self.user_card.pack(fill="x", padx=6, pady=(0, 14))
 
-        lbl_user_name = ctk.CTkLabel(
+        self.lbl_user_name = ctk.CTkLabel(
             self.user_card,
             text=f"👤 {self.current_user.full_name}",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=config.COLORS["text_dark"],
             anchor="w",
         )
-        lbl_user_name.pack(fill="x", padx=12, pady=(10, 2))
+        self.lbl_user_name.pack(fill="x", padx=12, pady=(10, 2))
 
         role_label = "🛡️ Administrador" if self.current_user.is_admin else "👤 Usuário"
-        lbl_role = ctk.CTkLabel(
+        self.lbl_role = ctk.CTkLabel(
             self.user_card,
             text=role_label,
             font=ctk.CTkFont(size=11),
             text_color=config.COLORS["text_muted"],
             anchor="w",
         )
-        lbl_role.pack(fill="x", padx=12, pady=(0, 8))
+        self.lbl_role.pack(fill="x", padx=12, pady=(0, 8))
 
         # Botões de perfil (Trocar senha e Sair)
-        user_actions = ctk.CTkFrame(self.user_card, fg_color="transparent")
-        user_actions.pack(fill="x", padx=10, pady=(0, 10))
+        self.user_actions = ctk.CTkFrame(self.user_card, fg_color="transparent")
+        self.user_actions.pack(fill="x", padx=10, pady=(0, 6))
 
-        btn_pass = ctk.CTkButton(
-            user_actions,
+        self.btn_pass = ctk.CTkButton(
+            self.user_actions,
             text="🔑 Senha",
             height=26,
             corner_radius=6,
@@ -340,10 +557,10 @@ class MainWindow(ctk.CTk):
             text_color=config.COLORS["button_text"],
             command=self._open_change_password_dialog,
         )
-        btn_pass.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.btn_pass.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
-        btn_logout = ctk.CTkButton(
-            user_actions,
+        self.btn_logout = ctk.CTkButton(
+            self.user_actions,
             text="🚪 Sair",
             height=26,
             corner_radius=6,
@@ -353,27 +570,47 @@ class MainWindow(ctk.CTk):
             text_color=config.COLORS["button_text"],
             command=self._handle_logout,
         )
-        btn_logout.pack(side="right", fill="x", expand=True, padx=(4, 0))
+        self.btn_logout.pack(side="right", fill="x", expand=True, padx=(4, 0))
+
+        self.btn_switch_user = ctk.CTkButton(
+            self.user_card,
+            text="🔄 Trocar Usuário",
+            height=28,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=config.COLORS["primary"],
+            hover_color=config.COLORS["primary_hover"],
+            text_color="#FFFFFF",
+            command=self._open_switch_user_dialog,
+        )
+        self.btn_switch_user.pack(fill="x", padx=10, pady=(0, 10))
+
+        self._sidebar_tooltips.extend([
+            WidgetTooltip(self.btn_pass, "Alterar Minha Senha"),
+            WidgetTooltip(self.btn_logout, "Sair do Sistema"),
+            WidgetTooltip(self.btn_switch_user, "Trocar Usuário"),
+        ])
 
         # Itens do Menu de Navegação
-        self.nav_menu_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        self.nav_menu_frame.pack(fill="both", expand=True, padx=14, pady=0)
+        self.nav_menu_frame = ctk.CTkFrame(self.sidebar_scroll, fg_color="transparent")
+        self.nav_menu_frame.pack(fill="x", padx=6, pady=0)
 
         nav_items = [
-            ("diary", "📝 Diário do Dia"),
-            ("notes", "🗂️ Notas & Pastas"),
-            ("schedules", "⏰ Agendamentos"),
-            ("search", "🔍 Pesquisa Avançada"),
-            ("history", "📅 Histórico & Calendário"),
-            ("import", "📥 Importar TXT"),
-            ("backup", "💾 Exportar & Backup"),
+            ("diary", "📝", "📝 Diário do Dia"),
+            ("notes", "📁", "📁 Notas & Pastas"),
+            ("schedules", "⏰", "⏰ Agendamentos"),
+            ("search", "🔍", "🔍 Pesquisa Avançada"),
+            ("history", "📅", "📅 Histórico & Calendário"),
+            ("import", "📥", "📥 Importar TXT"),
+            ("backup", "💾", "💾 Exportar & Backup"),
         ]
 
         if self.current_user.is_admin:
-            nav_items.append(("users", "👥 Gerenciar Usuários"))
+            nav_items.append(("users", "👥", "👥 Gerenciar Usuários"))
 
         self.nav_buttons.clear()
-        for key, label in nav_items:
+        self._nav_items_meta.clear()
+        for key, icon, label in nav_items:
             btn = ctk.CTkButton(
                 self.nav_menu_frame,
                 text=label,
@@ -388,10 +625,12 @@ class MainWindow(ctk.CTk):
             )
             btn.pack(fill="x", pady=3)
             self.nav_buttons[key] = btn
+            self._nav_items_meta[key] = (icon, label)
+            self._sidebar_tooltips.append(WidgetTooltip(btn, label))
 
         # Rodapé da Barra Lateral: Alternador de Tema e Versão
-        self.sidebar_footer = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        self.sidebar_footer.pack(side="bottom", fill="x", padx=14, pady=15)
+        self.sidebar_footer = ctk.CTkFrame(self.sidebar_scroll, fg_color="transparent")
+        self.sidebar_footer.pack(fill="x", padx=6, pady=(14, 10))
 
         is_light_theme = (str(getattr(self.current_user, "theme_preference", "dark")).lower() == "light")
         self.switch_theme = ctk.CTkSwitch(
@@ -407,13 +646,13 @@ class MainWindow(ctk.CTk):
             self.switch_theme.select()
         self.switch_theme.pack(anchor="w", pady=(0, 6))
 
-        lbl_ver = ctk.CTkLabel(
+        self.lbl_ver = ctk.CTkLabel(
             self.sidebar_footer,
             text=f"v{config.APP_VERSION} • Windows",
             font=ctk.CTkFont(size=11),
             text_color=config.COLORS["text_muted"],
         )
-        lbl_ver.pack(anchor="w", pady=(0, 4))
+        self.lbl_ver.pack(anchor="w", pady=(0, 4))
 
         self.btn_check_updates = ctk.CTkButton(
             self.sidebar_footer,
@@ -428,6 +667,13 @@ class MainWindow(ctk.CTk):
             command=lambda: self._check_updates_manually(),
         )
         self.btn_check_updates.pack(fill="x")
+        self._sidebar_tooltips.extend([
+            WidgetTooltip(self.switch_theme, "Alternar Tema Claro / Escuro"),
+            WidgetTooltip(self.btn_check_updates, "Verificar Atualização"),
+        ])
+
+        # Aplica modo recolhido/expandido atual
+        self._apply_sidebar_mode()
 
         # 2. Container de Conteúdo Principal
         self.content_frame = ctk.CTkFrame(
@@ -437,15 +683,130 @@ class MainWindow(ctk.CTk):
         )
         self.content_frame.grid(row=0, column=1, sticky="nsew")
 
+    def _update_sidebar_scrollbar(self):
+        """Mostra a barra de rolagem fina apenas quando o conteúdo não couber na altura da tela."""
+        try:
+            if not hasattr(self, "sidebar_scroll") or not self.sidebar_scroll.winfo_exists():
+                return
+            canvas = self.sidebar_scroll._parent_canvas
+            sb = self.sidebar_scroll._scrollbar
+            req_h = self.sidebar_scroll.winfo_reqheight()
+            vis_h = canvas.winfo_height()
+            if vis_h > 10 and req_h <= vis_h + 2:
+                sb.grid_remove()
+            else:
+                sb.grid()
+        except Exception:
+            pass
+
+    def _toggle_sidebar(self):
+        """Alterna o menu lateral entre modo completo (240px) e apenas ícones (76px)."""
+        self.sidebar_collapsed = not self.sidebar_collapsed
+        self._apply_sidebar_mode()
+
+    def _apply_sidebar_mode(self):
+        """Atualiza os widgets do menu lateral conforme o estado recolhido/expandido."""
+        if not hasattr(self, "sidebar") or not self.sidebar.winfo_exists():
+            return
+
+        collapsed = self.sidebar_collapsed
+        self.sidebar.configure(width=76 if collapsed else 240)
+        if hasattr(self, "sidebar_scroll"):
+            self.sidebar_scroll.configure(width=54 if collapsed else 218)
+
+        # Cabeçalho
+        self.btn_toggle_sidebar.pack_forget()
+        if collapsed:
+            self.lbl_logo.pack_forget()
+            self.lbl_app.pack_forget()
+            self.btn_toggle_sidebar.configure(text="▶", width=44)
+            self.btn_toggle_sidebar.pack(anchor="center")
+        else:
+            self.lbl_logo.pack_forget()
+            self.lbl_app.pack_forget()
+            self.lbl_logo.pack(side="left", padx=(4, 8))
+            self.lbl_app.pack(side="left", fill="x", expand=True)
+            self.btn_toggle_sidebar.configure(text="◀", width=28)
+            self.btn_toggle_sidebar.pack(side="right", padx=(2, 0))
+
+        # Card do usuário
+        if collapsed:
+            self.lbl_user_name.pack_forget()
+            self.lbl_role.pack_forget()
+            self.user_actions.pack_forget()
+            self.btn_switch_user.pack_forget()
+
+            self.btn_pass.pack_forget()
+            self.btn_logout.pack_forget()
+            self.btn_pass.configure(text="🔑", width=44)
+            self.btn_logout.configure(text="🚪", width=44)
+            self.btn_pass.pack(pady=(4, 2))
+            self.btn_logout.pack(pady=(0, 2))
+            self.user_actions.pack(fill="x", padx=4, pady=(6, 4))
+
+            self.btn_switch_user.configure(text="🔄", width=44)
+            self.btn_switch_user.pack(padx=4, pady=(0, 6))
+        else:
+            self.lbl_user_name.pack_forget()
+            self.lbl_role.pack_forget()
+            self.user_actions.pack_forget()
+            self.btn_switch_user.pack_forget()
+
+            self.lbl_user_name.pack(fill="x", padx=12, pady=(10, 2))
+            self.lbl_role.pack(fill="x", padx=12, pady=(0, 8))
+
+            self.btn_pass.pack_forget()
+            self.btn_logout.pack_forget()
+            self.btn_pass.configure(text="🔑 Senha", width=80)
+            self.btn_logout.configure(text="🚪 Sair", width=80)
+            self.btn_pass.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            self.btn_logout.pack(side="right", fill="x", expand=True, padx=(4, 0))
+            self.user_actions.pack(fill="x", padx=10, pady=(0, 6))
+
+            self.btn_switch_user.configure(text="🔄 Trocar Usuário", width=180)
+            self.btn_switch_user.pack(fill="x", padx=10, pady=(0, 10))
+
+        # Botões do menu de navegação
+        for key, btn in self.nav_buttons.items():
+            icon, label = self._nav_items_meta.get(key, ("•", key))
+            if collapsed:
+                btn.configure(text=icon, width=44, anchor="center", font=ctk.CTkFont(size=16))
+                btn.pack_configure(fill="none", anchor="center", pady=3)
+            else:
+                btn.configure(text=label, width=180, anchor="w", font=ctk.CTkFont(size=13, weight="bold"))
+                btn.pack_configure(fill="x", anchor="w", pady=3)
+
+        # Rodapé
+        is_light = not bool(self.switch_theme.get())
+        if collapsed:
+            self.switch_theme.configure(text="", width=44)
+            self.switch_theme.pack_configure(anchor="center")
+            self.lbl_ver.configure(text=f"v{config.APP_VERSION}")
+            self.lbl_ver.pack_configure(anchor="center")
+            self.btn_check_updates.configure(text="🔄", width=44, anchor="center")
+            self.btn_check_updates.pack_configure(fill="none", anchor="center")
+        else:
+            self.switch_theme.configure(text="Modo Claro" if is_light else "Modo Escuro", width=140)
+            self.switch_theme.pack_configure(anchor="w")
+            self.lbl_ver.configure(text=f"v{config.APP_VERSION} • Windows")
+            self.lbl_ver.pack_configure(anchor="w")
+            self.btn_check_updates.configure(text="🔄 Verificar Atualização", width=180, anchor="w")
+            self.btn_check_updates.pack_configure(fill="x", anchor="w")
+
+        self.update_idletasks()
+        self.after(20, self._update_sidebar_scrollbar)
+
     def _toggle_theme(self):
         if self.switch_theme.get():
             new_theme = "dark"
             ctk.set_appearance_mode("dark")
-            self.switch_theme.configure(text="Modo Escuro")
+            if not self.sidebar_collapsed:
+                self.switch_theme.configure(text="Modo Escuro")
         else:
             new_theme = "light"
             ctk.set_appearance_mode("light")
-            self.switch_theme.configure(text="Modo Claro")
+            if not self.sidebar_collapsed:
+                self.switch_theme.configure(text="Modo Claro")
 
         if self.current_user:
             self.current_user.theme_preference = new_theme
@@ -459,6 +820,18 @@ class MainWindow(ctk.CTk):
 
     def _open_change_password_dialog(self):
         SelfPasswordChangeDialog(self, self.current_user.id, self.auth_service)
+
+    def _open_switch_user_dialog(self):
+        """Permite trocar rapidamente para outro usuário ativo sem voltar à tela de login."""
+        if not self.current_user:
+            return
+        if hasattr(self.active_view, "confirm_discard_if_unsaved"):
+            if not self.active_view.confirm_discard_if_unsaved():
+                return
+
+        diag = SwitchUserDialog(self, self.current_user, self.auth_service)
+        if diag.selected_user is not None:
+            self._on_login_success(diag.selected_user)
 
     def _handle_logout(self):
         """Verifica alterações não salvas antes de efetuar logout."""
@@ -727,6 +1100,7 @@ class MainWindow(ctk.CTk):
                 import_service=self.import_service,
                 initial_folder_id=kwargs.get("folder_id"),
                 initial_note_id=kwargs.get("note_id"),
+                highlight_query=kwargs.get("highlight_query"),
             )
             self.active_view.pack(fill="both", expand=True)
 
@@ -748,6 +1122,7 @@ class MainWindow(ctk.CTk):
                 backup_service=self.backup_service,
                 on_open_diary_date=self._open_diary_from_search,
                 diary_service=self.diary_service,
+                on_open_folder_note=self._open_note_from_import,
             )
             self.active_view.pack(fill="both", expand=True)
 
@@ -804,8 +1179,13 @@ class MainWindow(ctk.CTk):
     def _open_diary_from_history(self, date_iso: str, user_id: Optional[int] = None):
         self.navigate_to("diary", date_iso=date_iso, user_id=user_id)
 
-    def _open_note_from_import(self, folder_id: Optional[int] = None, note_id: Optional[int] = None):
-        self.navigate_to("notes", folder_id=folder_id, note_id=note_id)
+    def _open_note_from_import(
+        self,
+        folder_id: Optional[int] = None,
+        note_id: Optional[int] = None,
+        highlight_query: Optional[str] = None,
+    ):
+        self.navigate_to("notes", folder_id=folder_id, note_id=note_id, highlight_query=highlight_query)
 
     def _on_import_finished(self):
         # Callback opcional após importação

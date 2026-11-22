@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS diaries (
     entry_date TEXT NOT NULL, -- Formato ISO: YYYY-MM-DD
     content TEXT NOT NULL DEFAULT '',
     content_normalized TEXT NOT NULL DEFAULT '', -- Sem acentos e em minúsculas
+    formatting_json TEXT NOT NULL DEFAULT '', -- Formatação rica (fonte, tamanho, negrito, sublinhado, riscado)
     created_at TEXT NOT NULL, -- YYYY-MM-DD HH:MM:SS
     updated_at TEXT NOT NULL, -- YYYY-MM-DD HH:MM:SS
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -88,6 +89,7 @@ CREATE TABLE IF NOT EXISTS notes (
     title TEXT NOT NULL,
     title_normalized TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',
+    formatting_json TEXT NOT NULL DEFAULT '', -- Formatação rica (fonte, tamanho, negrito, sublinhado, riscado)
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,

@@ -137,6 +137,32 @@ class TestUpdateService(unittest.TestCase):
         self.assertEqual(resolve_initial_install_dir(["--install-dir", custom_dir]), custom_dir)
         self.assertEqual(resolve_initial_install_dir([f"--install-dir={custom_dir}"]), custom_dir)
 
+    def test_changelog_reader_and_whats_new_dialog(self):
+        import customtkinter as ctk
+        from version import APP_VERSION, read_changelog_text
+        from views.components.changelog_dialog import parse_changelog, WhatsNewDialog
+
+        raw = read_changelog_text()
+        self.assertIn(APP_VERSION, raw)
+
+        entries = parse_changelog(raw)
+        self.assertGreaterEqual(len(entries), 5)
+        self.assertEqual(entries[0]["version"], APP_VERSION)
+        self.assertTrue(len(entries[0]["sections"]) >= 1)
+
+        root = ctk.CTk()
+        root.withdraw()
+        try:
+            dlg = WhatsNewDialog(root, changelog_text=raw)
+            dlg.update()
+            self.assertGreaterEqual(len(dlg.entries), 5)
+            dlg.combo_version.set(f"v{APP_VERSION} (Atual)")
+            dlg._render_entries()
+            dlg.update()
+            dlg.destroy()
+        finally:
+            root.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

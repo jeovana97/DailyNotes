@@ -17,6 +17,10 @@ if os.path.exists('assets'):
 if os.path.exists('VERSION'):
     datas.append(('VERSION', '.'))
 
+# Inclui o arquivo CHANGELOG.md para exibição offline de novidades no app
+if os.path.exists('CHANGELOG.md'):
+    datas.append(('CHANGELOG.md', '.'))
+
 a = Analysis(
     ['main.py'],
     pathex=['.'],

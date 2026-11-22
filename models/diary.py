@@ -9,6 +9,7 @@ class DiaryEntry:
     entry_date: str  # YYYY-MM-DD
     content: str
     content_normalized: str = ""
+    formatting_json: str = ""
     created_at: str = ""
     updated_at: str = ""
     author_name: Optional[str] = None
@@ -24,6 +25,7 @@ class DiaryEntry:
             entry_date=row["entry_date"],
             content=row["content"],
             content_normalized=row["content_normalized"] if "content_normalized" in keys else "",
+            formatting_json=row["formatting_json"] if "formatting_json" in keys else "",
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             author_name=row["full_name"] if "full_name" in keys else None,

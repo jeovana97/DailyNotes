@@ -8,6 +8,7 @@ from models.diary import DiaryEntry
 from services.diary_service import DiaryService
 from utils.date_utils import format_date_br, format_date_long_br, get_today_iso, MESES_PT
 from utils.syntax_highlighter import configure_syntax_tags, auto_highlight_content, clear_syntax_tags
+from utils.rich_text import RichTextController
 from views.components.calendar_widget import CalendarWidget
 from views.components.dialogs import DiaryNoteReaderDialog
 
@@ -214,6 +215,7 @@ class HistoryView(ctk.CTkFrame):
         )
         self.txt_day_preview.pack(fill="both", expand=True, padx=14, pady=(0, 14))
         configure_syntax_tags(self.txt_day_preview._textbox)
+        self._preview_rich_text = RichTextController(self.txt_day_preview, default_size=14)
 
     def _refresh_month_data(self, year: int, month: int):
         self.current_year = year
@@ -389,8 +391,10 @@ class HistoryView(ctk.CTkFrame):
             self.btn_preview_open.configure(text="📖 Abrir / Editar")
             self.txt_day_preview.insert("1.0", entry.content)
             auto_highlight_content(self.txt_day_preview)
+            self._preview_rich_text.load(getattr(entry, "formatting_json", ""))
         else:
             clear_syntax_tags(self.txt_day_preview._textbox)
+            self._preview_rich_text.reset()
             self.lbl_preview_meta.configure(
                 text="⚪ Nenhuma anotação registrada neste dia.",
                 text_color=config.COLORS["text_muted"],

@@ -19,6 +19,13 @@ from utils.date_utils import (
 )
 from views.components.dialogs import UnsavedChangesDialog, show_message
 from views.components.responsive_toolbar import ResponsiveToolbar
+from utils.rich_text import (
+    RichTextController,
+    AVAILABLE_FONTS,
+    AVAILABLE_FONT_SIZES,
+    DEFAULT_FONT_FAMILY,
+    DEFAULT_FONT_SIZE,
+)
 from services.spellcheck_service import WindowsSpellCheckService, SpellingError
 from utils.syntax_highlighter import (
     convert_selection_case,
@@ -367,6 +374,97 @@ class DiaryView(ctk.CTkFrame):
 
         self.responsive_format_bar.add_separator(key="sep1", width=10)
 
+        self.combo_font_family = ctk.CTkComboBox(
+            self.responsive_format_bar,
+            values=AVAILABLE_FONTS,
+            width=124,
+            height=28,
+            corner_radius=6,
+            state="readonly",
+            font=ctk.CTkFont(size=12),
+            fg_color=config.COLORS["card_dark"],
+            border_color=config.COLORS["border_dark"],
+            border_width=1,
+            text_color=config.COLORS["text_dark"],
+            button_color=config.COLORS["border_dark"],
+            button_hover_color=config.COLORS["primary"],
+            dropdown_fg_color=config.COLORS["card_dark"],
+            dropdown_text_color=config.COLORS["text_dark"],
+            dropdown_hover_color=config.COLORS["primary"],
+            command=lambda fam: self.rich_text.apply_font_family(fam) if hasattr(self, "rich_text") else None,
+        )
+        self.combo_font_family.set(DEFAULT_FONT_FAMILY)
+        self.responsive_format_bar.add_widget(
+            key="font_family",
+            widget=self.combo_font_family,
+            width=124,
+            tooltip_text="Selecionar Fonte",
+        )
+
+        self.combo_font_size = ctk.CTkComboBox(
+            self.responsive_format_bar,
+            values=AVAILABLE_FONT_SIZES,
+            width=62,
+            height=28,
+            corner_radius=6,
+            state="readonly",
+            font=ctk.CTkFont(size=12),
+            fg_color=config.COLORS["card_dark"],
+            border_color=config.COLORS["border_dark"],
+            border_width=1,
+            text_color=config.COLORS["text_dark"],
+            button_color=config.COLORS["border_dark"],
+            button_hover_color=config.COLORS["primary"],
+            dropdown_fg_color=config.COLORS["card_dark"],
+            dropdown_text_color=config.COLORS["text_dark"],
+            dropdown_hover_color=config.COLORS["primary"],
+            command=lambda sz: self.rich_text.apply_font_size(sz) if hasattr(self, "rich_text") else None,
+        )
+        self.combo_font_size.set(str(DEFAULT_FONT_SIZE))
+        self.responsive_format_bar.add_widget(
+            key="font_size",
+            widget=self.combo_font_size,
+            width=62,
+            tooltip_text="Tamanho da Fonte",
+        )
+
+        self.btn_bold = self.responsive_format_bar.add_button(
+            key="bold",
+            symbol_text="B",
+            full_label="Negrito (Ctrl+B)",
+            command=lambda: self.rich_text.toggle_bold() if hasattr(self, "rich_text") else None,
+            width=32,
+            height=28,
+            font_size=13,
+            font_weight="bold",
+        )
+
+        self.btn_underline = self.responsive_format_bar.add_button(
+            key="underline",
+            symbol_text="U",
+            full_label="Sublinhado (Ctrl+U)",
+            command=lambda: self.rich_text.toggle_underline() if hasattr(self, "rich_text") else None,
+            width=32,
+            height=28,
+            font_size=13,
+            font_weight="bold",
+            font_underline=True,
+        )
+
+        self.btn_overstrike = self.responsive_format_bar.add_button(
+            key="overstrike",
+            symbol_text="S",
+            full_label="Riscado",
+            command=lambda: self.rich_text.toggle_overstrike() if hasattr(self, "rich_text") else None,
+            width=32,
+            height=28,
+            font_size=13,
+            font_weight="bold",
+            font_overstrike=True,
+        )
+
+        self.responsive_format_bar.add_separator(key="sep_rich", width=10)
+
         self.btn_uppercase = self.responsive_format_bar.add_button(
             key="uppercase",
             symbol_text="🔠",
@@ -440,6 +538,19 @@ class DiaryView(ctk.CTkFrame):
         self.txt_content._textbox.bind("<Button-3>", self._on_textbox_context_menu)
         self.txt_content._textbox.bind("<Button-2>", self._on_textbox_context_menu)
 
+        # Controlador de formatação rica (Fonte, Tamanho, Negrito, Sublinhado e Riscado)
+        self.rich_text = RichTextController(
+            self.txt_content,
+            on_change_callback=self._on_text_modified,
+        )
+        self.rich_text.attach_toolbar_widgets(
+            combo_font=self.combo_font_family,
+            combo_size=self.combo_font_size,
+            btn_bold=self.btn_bold,
+            btn_underline=self.btn_underline,
+            btn_overstrike=self.btn_overstrike,
+        )
+
         # 4. Barra de Status Inferior
         self.status_bar = ctk.CTkFrame(
             self,
@@ -505,6 +616,8 @@ class DiaryView(ctk.CTkFrame):
         self.txt_content.insert("1.0", content)
         reset_undo_stack(self.txt_content)
         auto_highlight_content(self.txt_content)
+        if hasattr(self, "rich_text"):
+            self.rich_text.load(getattr(self.active_entry, "formatting_json", ""))
 
         self.has_unsaved_changes = False
         self._update_status_indicator(saved=True, timestamp=self.active_entry.updated_at)
@@ -543,8 +656,10 @@ class DiaryView(ctk.CTkFrame):
 
         current_text = self.txt_content.get("1.0", "end-1c")
         original_text = self.active_entry.content if self.active_entry else ""
+        current_fmt = self.rich_text.serialize() if hasattr(self, "rich_text") else ""
+        original_fmt = (getattr(self.active_entry, "formatting_json", "") or "") if self.active_entry else ""
 
-        if current_text != original_text:
+        if current_text != original_text or current_fmt != original_fmt:
             if not self.has_unsaved_changes:
                 self.has_unsaved_changes = True
                 self._update_status_indicator(saved=False)
@@ -598,8 +713,12 @@ class DiaryView(ctk.CTkFrame):
             )
             self.update_idletasks()
 
+            fmt_json = self.rich_text.serialize() if hasattr(self, "rich_text") else ""
             saved_entry = self.diary_service.save_entry(
-                self.target_user.id, self.current_date_iso, content
+                self.target_user.id,
+                self.current_date_iso,
+                content,
+                formatting_json=fmt_json,
             )
             self.active_entry = saved_entry
             self.has_unsaved_changes = False
@@ -665,6 +784,8 @@ class DiaryView(ctk.CTkFrame):
         except Exception:
             pass
         self.txt_content.delete("1.0", "end")
+        if hasattr(self, "rich_text"):
+            self.rich_text.reset()
         try:
             self.txt_content._textbox.edit_separator()
         except Exception:

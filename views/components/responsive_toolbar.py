@@ -183,6 +183,8 @@ class ResponsiveToolbar(ctk.CTkFrame):
         text_color: Optional[str] = None,
         font_size: int = 12,
         font_weight: str = "bold",
+        font_underline: bool = False,
+        font_overstrike: bool = False,
     ) -> ctk.CTkButton:
         """
         Adiciona um botão de ação.
@@ -195,7 +197,12 @@ class ResponsiveToolbar(ctk.CTkFrame):
             width=width,
             height=height,
             corner_radius=6,
-            font=ctk.CTkFont(size=font_size, weight=font_weight),
+            font=ctk.CTkFont(
+                size=font_size,
+                weight=font_weight,
+                underline=font_underline,
+                overstrike=font_overstrike,
+            ),
             fg_color=fg_color or config.COLORS["card_dark"],
             hover_color=hover_color or config.COLORS["primary"],
             text_color=text_color or config.COLORS["button_text"],
@@ -216,6 +223,20 @@ class ResponsiveToolbar(ctk.CTkFrame):
         })
         self._schedule_reflow()
         return btn
+
+    def add_widget(self, key: str, widget, width: int, tooltip_text: str = ""):
+        """Adiciona um widget arbitrário (ex.: ComboBox de Fonte/Tamanho) na barra responsiva."""
+        tooltip = WidgetTooltip(widget, tooltip_text) if tooltip_text else None
+        self.items.append({
+            "type": "widget",
+            "key": key,
+            "widget": widget,
+            "tooltip": tooltip,
+            "width": width,
+            "is_visible": False,
+        })
+        self._schedule_reflow()
+        return widget
 
     def add_separator(self, key: str = "sep", width: int = 12):
         """Adiciona um separador vertical discreto."""

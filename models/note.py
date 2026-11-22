@@ -35,6 +35,7 @@ class NoteItem:
     title: str
     title_normalized: str = ""
     content: str = ""
+    formatting_json: str = ""
     created_at: str = ""
     updated_at: str = ""
     folder_name: Optional[str] = None
@@ -50,6 +51,7 @@ class NoteItem:
             title=row["title"],
             title_normalized=row["title_normalized"] if "title_normalized" in keys else "",
             content=row["content"],
+            formatting_json=row["formatting_json"] if "formatting_json" in keys else "",
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             folder_name=row["folder_name"] if "folder_name" in keys else None,

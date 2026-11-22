@@ -57,10 +57,16 @@ class DiaryService:
             updated_at=now,
         )
 
-    def save_entry(self, user_id: int, entry_date: str, content: str) -> DiaryEntry:
+    def save_entry(
+        self,
+        user_id: int,
+        entry_date: str,
+        content: str,
+        formatting_json: Optional[str] = None,
+    ) -> DiaryEntry:
         """
         Salva ou atualiza a anotação diária no banco de dados.
-        Atualiza o texto normalizado e os timestamps de alteração.
+        Atualiza o texto normalizado, formatação rica (opcional) e os timestamps de alteração.
         Garante que nunca haja duplicidade de anotações para o mesmo usuário e data.
         """
         if not is_valid_iso_date(entry_date):
@@ -71,17 +77,31 @@ class DiaryService:
 
         with get_db(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO diaries (user_id, entry_date, content, content_normalized, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(user_id, entry_date) DO UPDATE SET
-                    content = excluded.content,
-                    content_normalized = excluded.content_normalized,
-                    updated_at = excluded.updated_at
-                """,
-                (user_id, entry_date, content, norm_content, now, now),
-            )
+            if formatting_json is None:
+                cursor.execute(
+                    """
+                    INSERT INTO diaries (user_id, entry_date, content, content_normalized, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, entry_date) DO UPDATE SET
+                        content = excluded.content,
+                        content_normalized = excluded.content_normalized,
+                        updated_at = excluded.updated_at
+                    """,
+                    (user_id, entry_date, content, norm_content, now, now),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO diaries (user_id, entry_date, content, content_normalized, formatting_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, entry_date) DO UPDATE SET
+                        content = excluded.content,
+                        content_normalized = excluded.content_normalized,
+                        formatting_json = excluded.formatting_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (user_id, entry_date, content, norm_content, formatting_json, now, now),
+                )
 
         saved = self.get_entry_by_date(user_id, entry_date)
         if not saved:

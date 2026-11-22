@@ -54,6 +54,21 @@ def init_db(db_path: Optional[str] = None) -> None:
                     "ALTER TABLE backup_settings ADD COLUMN retention_days INTEGER NOT NULL DEFAULT 7"
                 )
 
+            # Migração incremental: garante coluna formatting_json em diaries e notes
+            cursor = conn.execute("PRAGMA table_info(diaries)")
+            diary_cols = {row["name"] for row in cursor.fetchall()}
+            if "formatting_json" not in diary_cols:
+                conn.execute(
+                    "ALTER TABLE diaries ADD COLUMN formatting_json TEXT NOT NULL DEFAULT ''"
+                )
+
+            cursor = conn.execute("PRAGMA table_info(notes)")
+            note_cols = {row["name"] for row in cursor.fetchall()}
+            if "formatting_json" not in note_cols:
+                conn.execute(
+                    "ALTER TABLE notes ADD COLUMN formatting_json TEXT NOT NULL DEFAULT ''"
+                )
+
             # 2. Criação dos índices
             for statement in CREATE_DIARIES_INDEXES.strip().split(";"):
                 stmt = statement.strip()

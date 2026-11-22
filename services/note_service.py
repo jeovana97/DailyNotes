@@ -466,6 +466,7 @@ class NoteService:
         content: str = "",
         folder_id: Optional[int] = None,
         note_id: Optional[int] = None,
+        formatting_json: Optional[str] = None,
     ) -> NoteItem:
         """
         Cria uma nova nota (quando note_id=None) ou atualiza uma nota existente.
@@ -489,12 +490,13 @@ class NoteService:
                     raise ValueError("A pasta selecionada não existe.")
 
             if note_id is None:
+                fmt_val = formatting_json if formatting_json is not None else ""
                 cursor.execute(
                     """
-                    INSERT INTO notes (user_id, folder_id, title, title_normalized, content, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO notes (user_id, folder_id, title, title_normalized, content, formatting_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (user_id, folder_id, clean_title, norm_title, content, now, now),
+                    (user_id, folder_id, clean_title, norm_title, content, fmt_val, now, now),
                 )
                 target_id = cursor.lastrowid
             else:
@@ -505,18 +507,33 @@ class NoteService:
                 if not cursor.fetchone():
                     raise ValueError("Nota não encontrada para atualização.")
 
-                cursor.execute(
-                    """
-                    UPDATE notes
-                    SET folder_id = ?,
-                        title = ?,
-                        title_normalized = ?,
-                        content = ?,
-                        updated_at = ?
-                    WHERE id = ? AND user_id = ?
-                    """,
-                    (folder_id, clean_title, norm_title, content, now, note_id, user_id),
-                )
+                if formatting_json is None:
+                    cursor.execute(
+                        """
+                        UPDATE notes
+                        SET folder_id = ?,
+                            title = ?,
+                            title_normalized = ?,
+                            content = ?,
+                            updated_at = ?
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (folder_id, clean_title, norm_title, content, now, note_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE notes
+                        SET folder_id = ?,
+                            title = ?,
+                            title_normalized = ?,
+                            content = ?,
+                            formatting_json = ?,
+                            updated_at = ?
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (folder_id, clean_title, norm_title, content, formatting_json, now, note_id, user_id),
+                    )
                 target_id = note_id
 
         saved = self.get_note(user_id, target_id)

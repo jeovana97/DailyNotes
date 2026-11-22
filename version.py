@@ -5,7 +5,7 @@ import os
 import sys
 
 
-def read_version_file(default: str = "1.5.0") -> str:
+def read_version_file(default: str = "1.6.0") -> str:
     """Lê a versão atual a partir do arquivo VERSION (suporta execução normal e PyInstaller)."""
     candidates = []
     if getattr(sys, "frozen", False):
@@ -25,6 +25,26 @@ def read_version_file(default: str = "1.5.0") -> str:
             except Exception:
                 pass
     return default
+
+
+def read_changelog_text() -> str:
+    """Lê o conteúdo do arquivo CHANGELOG.md (suporta execução normal e PyInstaller)."""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            candidates.append(os.path.join(meipass, "CHANGELOG.md"))
+        candidates.append(os.path.join(os.path.dirname(sys.executable), "CHANGELOG.md"))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "CHANGELOG.md"))
+
+    for path in candidates:
+        if path and os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+    return ""
 
 
 APP_NAME = "Diário de Anotações Inteligente"

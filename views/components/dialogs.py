@@ -21,6 +21,13 @@ from utils.syntax_highlighter import (
     focus_search_match,
     clear_search_highlights,
 )
+from utils.rich_text import (
+    RichTextController,
+    AVAILABLE_FONTS,
+    AVAILABLE_FONT_SIZES,
+    DEFAULT_FONT_FAMILY,
+    DEFAULT_FONT_SIZE,
+)
 
 
 def _fit_modal_height(win, parent, width: int, min_height: int, max_height: int = 580):
@@ -299,6 +306,7 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
 
         self.entry = self.diary_service.get_or_create_entry(self.user_id, self.date_iso)
         self.original_content = self.entry.content or ""
+        self.original_formatting = getattr(self.entry, "formatting_json", "") or ""
         self.is_editing = False
         self.has_unsaved_changes = False
 
@@ -522,6 +530,97 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
 
         self.responsive_format_bar.add_separator(key="sep1", width=10)
 
+        self.combo_font_family = ctk.CTkComboBox(
+            self.responsive_format_bar,
+            values=AVAILABLE_FONTS,
+            width=120,
+            height=26,
+            corner_radius=6,
+            state="readonly",
+            font=ctk.CTkFont(size=12),
+            fg_color=config.COLORS["card_dark"],
+            border_color=config.COLORS["border_dark"],
+            border_width=1,
+            text_color=config.COLORS["text_dark"],
+            button_color=config.COLORS["border_dark"],
+            button_hover_color=config.COLORS["primary"],
+            dropdown_fg_color=config.COLORS["card_dark"],
+            dropdown_text_color=config.COLORS["text_dark"],
+            dropdown_hover_color=config.COLORS["primary"],
+            command=lambda fam: self.rich_text.apply_font_family(fam) if hasattr(self, "rich_text") else None,
+        )
+        self.combo_font_family.set(DEFAULT_FONT_FAMILY)
+        self.responsive_format_bar.add_widget(
+            key="font_family",
+            widget=self.combo_font_family,
+            width=120,
+            tooltip_text="Selecionar Fonte",
+        )
+
+        self.combo_font_size = ctk.CTkComboBox(
+            self.responsive_format_bar,
+            values=AVAILABLE_FONT_SIZES,
+            width=60,
+            height=26,
+            corner_radius=6,
+            state="readonly",
+            font=ctk.CTkFont(size=12),
+            fg_color=config.COLORS["card_dark"],
+            border_color=config.COLORS["border_dark"],
+            border_width=1,
+            text_color=config.COLORS["text_dark"],
+            button_color=config.COLORS["border_dark"],
+            button_hover_color=config.COLORS["primary"],
+            dropdown_fg_color=config.COLORS["card_dark"],
+            dropdown_text_color=config.COLORS["text_dark"],
+            dropdown_hover_color=config.COLORS["primary"],
+            command=lambda sz: self.rich_text.apply_font_size(sz) if hasattr(self, "rich_text") else None,
+        )
+        self.combo_font_size.set(str(DEFAULT_FONT_SIZE))
+        self.responsive_format_bar.add_widget(
+            key="font_size",
+            widget=self.combo_font_size,
+            width=60,
+            tooltip_text="Tamanho da Fonte",
+        )
+
+        self.btn_bold = self.responsive_format_bar.add_button(
+            key="bold",
+            symbol_text="B",
+            full_label="Negrito (Ctrl+B)",
+            command=lambda: self.rich_text.toggle_bold() if hasattr(self, "rich_text") else None,
+            width=30,
+            height=26,
+            font_size=13,
+            font_weight="bold",
+        )
+
+        self.btn_underline = self.responsive_format_bar.add_button(
+            key="underline",
+            symbol_text="U",
+            full_label="Sublinhado (Ctrl+U)",
+            command=lambda: self.rich_text.toggle_underline() if hasattr(self, "rich_text") else None,
+            width=30,
+            height=26,
+            font_size=13,
+            font_weight="bold",
+            font_underline=True,
+        )
+
+        self.btn_overstrike = self.responsive_format_bar.add_button(
+            key="overstrike",
+            symbol_text="S",
+            full_label="Riscado",
+            command=lambda: self.rich_text.toggle_overstrike() if hasattr(self, "rich_text") else None,
+            width=30,
+            height=26,
+            font_size=13,
+            font_weight="bold",
+            font_overstrike=True,
+        )
+
+        self.responsive_format_bar.add_separator(key="sep_rich", width=10)
+
         self.btn_uppercase = self.responsive_format_bar.add_button(
             key="uppercase",
             symbol_text="🔠",
@@ -578,6 +677,19 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self.txt_content.bind("<KeyRelease>", self._on_text_modified)
         enable_undo_redo(self.txt_content, on_change_callback=self._on_text_modified)
         configure_syntax_tags(self.txt_content._textbox)
+
+        # Controlador de formatação rica (Fonte, Tamanho, Negrito, Sublinhado e Riscado)
+        self.rich_text = RichTextController(
+            self.txt_content,
+            on_change_callback=self._on_text_modified,
+        )
+        self.rich_text.attach_toolbar_widgets(
+            combo_font=self.combo_font_family,
+            combo_size=self.combo_font_size,
+            btn_bold=self.btn_bold,
+            btn_underline=self.btn_underline,
+            btn_overstrike=self.btn_overstrike,
+        )
 
         # Tag para destacar termos pesquisados
         try:
@@ -653,6 +765,8 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self.txt_content.insert("1.0", self.original_content)
         reset_undo_stack(self.txt_content)
         auto_highlight_content(self.txt_content)
+        if hasattr(self, "rich_text"):
+            self.rich_text.load(self.original_formatting)
 
         # Destaca termos pesquisados se houver query
         if self.highlight_query:
@@ -665,6 +779,17 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
 
     def _update_format_buttons_state(self):
         case_state = "normal" if self.is_editing else "disabled"
+        combo_state = "readonly" if self.is_editing else "disabled"
+        if hasattr(self, "combo_font_family"):
+            self.combo_font_family.configure(state=combo_state)
+        if hasattr(self, "combo_font_size"):
+            self.combo_font_size.configure(state=combo_state)
+        if hasattr(self, "btn_bold"):
+            self.btn_bold.configure(state=case_state)
+        if hasattr(self, "btn_underline"):
+            self.btn_underline.configure(state=case_state)
+        if hasattr(self, "btn_overstrike"):
+            self.btn_overstrike.configure(state=case_state)
         if hasattr(self, "btn_uppercase"):
             self.btn_uppercase.configure(state=case_state)
         if hasattr(self, "btn_lowercase"):
@@ -869,9 +994,10 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         if not self.is_editing:
             return
         current_text = self.txt_content.get("1.0", "end-1c")
+        current_fmt = self.rich_text.serialize() if hasattr(self, "rich_text") else ""
         self._update_meta_and_counts(current_text)
 
-        if current_text != self.original_content:
+        if current_text != self.original_content or current_fmt != self.original_formatting:
             self.has_unsaved_changes = True
             self.lbl_status.configure(
                 text="⚪ Alterações não salvas *",
@@ -890,10 +1016,17 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
             return True
 
         new_content = self.txt_content.get("1.0", "end-1c")
+        fmt_json = self.rich_text.serialize() if hasattr(self, "rich_text") else ""
         try:
-            saved_entry = self.diary_service.save_entry(self.user_id, self.date_iso, new_content)
+            saved_entry = self.diary_service.save_entry(
+                self.user_id,
+                self.date_iso,
+                new_content,
+                formatting_json=fmt_json,
+            )
             self.entry = saved_entry
             self.original_content = saved_entry.content or ""
+            self.original_formatting = getattr(saved_entry, "formatting_json", "") or ""
             self.has_unsaved_changes = False
             self.is_editing = False
 

@@ -29,6 +29,7 @@ from views.backup_view import BackupView
 from views.users_view import UsersView
 from views.components.dialogs import show_message, ask_confirmation
 from views.components.update_dialog import UpdateAvailableDialog
+from views.components.changelog_dialog import WhatsNewDialog
 from views.components.responsive_toolbar import WidgetTooltip
 from utils.syntax_highlighter import configure_syntax_tags
 from utils.window_utils import center_window_on_primary_screen, get_display_monitors, center_modal_on_parent
@@ -654,6 +655,20 @@ class MainWindow(ctk.CTk):
         )
         self.lbl_ver.pack(anchor="w", pady=(0, 4))
 
+        self.btn_whats_new = ctk.CTkButton(
+            self.sidebar_footer,
+            text="✨ Novidades",
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="transparent",
+            hover_color=config.COLORS["card_dark_alt"],
+            text_color=config.COLORS["primary"],
+            anchor="w",
+            command=self._open_whats_new_dialog,
+        )
+        self.btn_whats_new.pack(fill="x", pady=(0, 2))
+
         self.btn_check_updates = ctk.CTkButton(
             self.sidebar_footer,
             text="🔄 Verificar Atualização",
@@ -669,6 +684,7 @@ class MainWindow(ctk.CTk):
         self.btn_check_updates.pack(fill="x")
         self._sidebar_tooltips.extend([
             WidgetTooltip(self.switch_theme, "Alternar Tema Claro / Escuro"),
+            WidgetTooltip(self.btn_whats_new, "Ver Novidades e Histórico de Versões"),
             WidgetTooltip(self.btn_check_updates, "Verificar Atualização"),
         ])
 
@@ -783,6 +799,8 @@ class MainWindow(ctk.CTk):
             self.switch_theme.pack_configure(anchor="center")
             self.lbl_ver.configure(text=f"v{config.APP_VERSION}")
             self.lbl_ver.pack_configure(anchor="center")
+            self.btn_whats_new.configure(text="✨", width=44, anchor="center")
+            self.btn_whats_new.pack_configure(fill="none", anchor="center")
             self.btn_check_updates.configure(text="🔄", width=44, anchor="center")
             self.btn_check_updates.pack_configure(fill="none", anchor="center")
         else:
@@ -790,11 +808,17 @@ class MainWindow(ctk.CTk):
             self.switch_theme.pack_configure(anchor="w")
             self.lbl_ver.configure(text=f"v{config.APP_VERSION} • Windows")
             self.lbl_ver.pack_configure(anchor="w")
+            self.btn_whats_new.configure(text="✨ Novidades", width=180, anchor="w")
+            self.btn_whats_new.pack_configure(fill="x", anchor="w")
             self.btn_check_updates.configure(text="🔄 Verificar Atualização", width=180, anchor="w")
             self.btn_check_updates.pack_configure(fill="x", anchor="w")
 
         self.update_idletasks()
         self.after(20, self._update_sidebar_scrollbar)
+
+    def _open_whats_new_dialog(self):
+        """Abre a janela dedicada com as novidades e histórico de versões (CHANGELOG.md)."""
+        WhatsNewDialog(self)
 
     def _toggle_theme(self):
         if self.switch_theme.get():

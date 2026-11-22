@@ -7,6 +7,20 @@ e este projeto adere ao [Semantic Versioning (SemVer)](https://semver.org/lang/p
 
 ---
 
+## [1.6.0] - 2026-11-22
+### Added
+- Formatação rica de texto no **Diário do Dia**, em **Notas & Pastas** e na janela de leitura/edição (`DiaryNoteReaderDialog`): seletores de **Fonte** e **Tamanho**, além de botões combináveis de **Negrito (`B` / `Ctrl+B`)**, **Sublinhado (`U` / `Ctrl+U`)** e **Riscado (`S`)**, aplicáveis tanto sobre texto selecionado quanto globalmente/durante a digitação contínua.
+- Motor dedicado de formatação (`utils/rich_text.py`) com persistência em JSON (`formatting_json`) nas tabelas `diaries` e `notes` (com migração incremental automática para bancos antigos), preservando integralmente o texto puro para busca FTS5, busca sem acentos, destaque `F3`, corretor ortográfico e exportações.
+- Renderização da formatação rica salva também na pré-visualização diária da tela **Histórico & Calendário**.
+- Botão **✨ Novidades** no rodapé da barra lateral com modal dedicado (`WhatsNewDialog`) para consultar offline o histórico completo de novidades de cada versão diretamente a partir do `CHANGELOG.md`, sem precisar abrir a tela de verificação de atualização.
+
+### Changed
+- `ResponsiveToolbar` ampliada para aceitar widgets arbitrários (`add_widget`) e estilos de fonte sublinhado/riscado nos botões da barra de formatação.
+- Detecção de alterações não salvas e salvamento automático nos editores atualizados para considerar mudanças exclusivas de formatação (fonte, tamanho, negrito, sublinhado ou riscado).
+- Empacotamento PyInstaller (`diario_anotacoes.spec` e `diario_anotacoes_onedir.spec`) atualizado para incluir `CHANGELOG.md` no executável final.
+
+---
+
 ## [1.5.0] - 2026-11-19
 ### Added
 - Pesquisa Avançada ampliada com seletor de escopo (**Diário e Pastas**, **Somente Diário** e **Pastas e Arquivos**), exibindo selo visual identificando a origem (**📔 Diário** ou **📁 Pasta & Arquivos** com caminho completo da pasta e título da nota) e botão para abrir diretamente na pasta correspondente.

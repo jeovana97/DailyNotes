@@ -1,6 +1,6 @@
 # Diário de Anotações Inteligente (DailyNotes) 📓
 
-**Versão atual:** `1.5.0`
+**Versão atual:** `1.6.0`
 
 O **Diário de Anotações Inteligente (DailyNotes)** é um sistema desktop completo para Windows, desenvolvido em **Python** e **CustomTkinter**, projetado para centralizar, organizar e consultar tanto **anotações diárias por data** quanto **notas técnicas/permanentes organizadas em pastas e subpastas**.
 
@@ -14,7 +14,8 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **Registro Diário Organizado:** Uma anotação centralizada para cada data do calendário por usuário, evitando arquivos duplicados.
 - **Navegação Rápida:** Botões **◀ Anterior**, **📅 Hoje** e **Próximo ▶** para alternar rapidamente entre os dias.
 - **Salvamento Manual e Automático:** Botão **💾 Salvar (Ctrl+S)** e chave de **Salvamento Automático** após segundos de inatividade, com indicador de status em tempo real (`🟢 Salvo`, `⚪ Alterações não salvas *`).
-- **Formatação de Texto (MAIÚSCULO, minúsculo, XML e SQL com Cores):**
+- **Formatação de Texto (Fonte, Tamanho, Negrito, Sublinhado, Riscado, MAIÚSCULO, minúsculo, XML e SQL com Cores):**
+  - **Fonte, Tamanho e Estilos (`B`, `U`, `S`):** Selecione a família da fonte, o tamanho e combine **Negrito (`Ctrl+B`)**, **Sublinhado (`Ctrl+U`)** e **Riscado** sobre trechos selecionados ou no texto inteiro, com persistência automática sem afetar a pesquisa FTS5 ou a exportação.
   - **🔠 MAIÚSCULO** e **🔡 minúsculo:** Selecione qualquer trecho no texto (ou no título da nota) e converta instantaneamente para letras maiúsculas ou minúsculas.
   - **</> XML (Cor)** e **🗄️ SQL (Cor):** Formata (indenta tags XML ou padroniza cláusulas/comandos SQL) e aplica **destaque de sintaxe colorido** (tags, atributos, valores, comandos `SELECT`, `FROM`, `WHERE`, `JOIN`, funções, strings e comentários).
 - **Colagem Inteligente:** Ao colar qualquer texto (`Ctrl+V` ou menu do botão direito **📄 Colar**), o cursor é posicionado automaticamente no final do texto e a tela rola para exibir a última informação colada.
@@ -25,7 +26,7 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 ### 2. 🗂️ Notas & Pastas (Notas sem Vínculo com Datas)
 - **Organização Livre por Assunto:** Ideal para guardar scripts SQL, senhas, leiautes XML, procedimentos, links úteis e anotações de referência permanente.
 - **Pastas e Subpastas Ilimitadas:** Crie pastas principais e subpastas aninhadas, renomeie ou exclua pastas facilmente.
-- **Formatação Colorida XML/SQL e Conversão de Caixa:** Barra de ferramentas integrada com botões **🔠 MAIÚSCULO**, **🔡 minúsculo**, **</> XML (Cor)**, **🗄️ SQL (Cor)** e **🎨 Limpar Cor**, além de detecção automática de cores ao abrir notas com XML ou SQL.
+- **Formatação Rica, Cores XML/SQL e Conversão de Caixa:** Barra de ferramentas integrada com seletores de **Fonte** e **Tamanho**, botões **Negrito (`B`)**, **Sublinhado (`U`)**, **Riscado (`S`)**, **🔠 MAIÚSCULO**, **🔡 minúsculo**, **</> XML (Cor)**, **🗄️ SQL (Cor)** e **🎨 Limpar Cor**, além de detecção automática de cores ao abrir notas com XML ou SQL.
 - **Importação Direta para Pastas:** Botão **📥 Importar TXT** para importar arquivos `.txt` com qualquer nome (sem precisar de formato de data), perguntando em qual pasta deseja colocar a nota ou permitindo criar uma nova pasta na hora.
 - **Mover Nota de Pasta:** Mova qualquer nota entre pastas pelo seletor no topo do editor, pelo botão **📂 Mover** ou pelo menu de opções (`⋯` / clique direito na nota).
 - **Pesquisa Exclusiva por Nome da Nota:** Possui barra de busca própria no topo da árvore lateral que filtra instantaneamente pelo título da nota (mantendo essas notas isoladas da Pesquisa Avançada do Diário).
@@ -68,9 +69,10 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **🔄 Restauração Segura:** Valida o arquivo `.db`/`.bak` selecionado e cria uma cópia preventiva de segurança antes de restaurar.
 - **📂 Exportação em Lote para TXT:** Exporta todas as anotações do diário para uma pasta em arquivos individuais `DD MM AAAA.txt`.
 
-### 8. 🎨 Tema Persistente e Controle de Usuários
+### 8. 🎨 Tema Persistente, Novidades e Controle de Usuários
 - **Modo Escuro e Modo Claro Persistentes:** A escolha entre **Modo Escuro** e **Modo Claro** no rodapé da barra lateral é salva automaticamente no perfil do usuário e restaurada sempre que ele fizer login novamente.
-- **Gerenciamento de Usuários (Admin):** Cadastro de novos usuários, ativação/desativação de contas, redefinição de senhas (criptografia **Argon2id**) e permissão para visualizar diários de outros usuários.
+- **✨ Novidades Offline:** Botão dedicado na barra lateral para consultar o histórico completo de novidades e melhorias de cada versão diretamente no aplicativo, sem necessidade de internet.
+- **Gerenciamento de Usuários (Admin):** Cadastro de novos usuários, ativação/desativação de contas, redefinição de senhas (criptografia **Argon2id**), troca rápida de usuário sem sair da sessão e permissão para visualizar diários de outros usuários.
 
 ---
 

@@ -183,6 +183,7 @@ class ResponsiveToolbar(ctk.CTkFrame):
         text_color: Optional[str] = None,
         font_size: int = 12,
         font_weight: str = "bold",
+        font_slant: str = "roman",
         font_underline: bool = False,
         font_overstrike: bool = False,
     ) -> ctk.CTkButton:
@@ -200,6 +201,7 @@ class ResponsiveToolbar(ctk.CTkFrame):
             font=ctk.CTkFont(
                 size=font_size,
                 weight=font_weight,
+                slant=font_slant,
                 underline=font_underline,
                 overstrike=font_overstrike,
             ),

@@ -28,6 +28,10 @@ from utils.rich_text import (
     DEFAULT_FONT_FAMILY,
     DEFAULT_FONT_SIZE,
 )
+from utils.editor_history import (
+    commit_history_before_action,
+    record_history_after_action,
+)
 
 
 def _fit_modal_height(win, parent, width: int, min_height: int, max_height: int = 580):
@@ -595,6 +599,18 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
             font_weight="bold",
         )
 
+        self.btn_italic = self.responsive_format_bar.add_button(
+            key="italic",
+            symbol_text="I",
+            full_label="Itálico (Ctrl+I)",
+            command=lambda: self.rich_text.toggle_italic() if hasattr(self, "rich_text") else None,
+            width=30,
+            height=26,
+            font_size=13,
+            font_weight="bold",
+            font_slant="italic",
+        )
+
         self.btn_underline = self.responsive_format_bar.add_button(
             key="underline",
             symbol_text="U",
@@ -687,6 +703,7 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
             combo_font=self.combo_font_family,
             combo_size=self.combo_font_size,
             btn_bold=self.btn_bold,
+            btn_italic=self.btn_italic,
             btn_underline=self.btn_underline,
             btn_overstrike=self.btn_overstrike,
         )
@@ -763,10 +780,10 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self.txt_content.configure(state="normal")
         self.txt_content.delete("1.0", "end")
         self.txt_content.insert("1.0", self.original_content)
-        reset_undo_stack(self.txt_content)
         auto_highlight_content(self.txt_content)
         if hasattr(self, "rich_text"):
             self.rich_text.load(self.original_formatting)
+        reset_undo_stack(self.txt_content)
 
         # Destaca termos pesquisados se houver query
         if self.highlight_query:
@@ -786,6 +803,8 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
             self.combo_font_size.configure(state=combo_state)
         if hasattr(self, "btn_bold"):
             self.btn_bold.configure(state=case_state)
+        if hasattr(self, "btn_italic"):
+            self.btn_italic.configure(state=case_state)
         if hasattr(self, "btn_underline"):
             self.btn_underline.configure(state=case_state)
         if hasattr(self, "btn_overstrike"):
@@ -804,26 +823,20 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
     def _on_undo(self):
         if not self.is_editing:
             return
-        try:
-            self.txt_content.edit_undo()
-            self._on_text_modified()
-        except Exception:
-            pass
+        perform_undo(self.txt_content, on_change_callback=self._on_text_modified)
 
     def _on_redo(self):
         if not self.is_editing:
             return
-        try:
-            self.txt_content.edit_redo()
-            self._on_text_modified()
-        except Exception:
-            pass
+        perform_redo(self.txt_content, on_change_callback=self._on_text_modified)
 
     def _on_cut(self):
         if not self.is_editing:
             return
         try:
+            commit_history_before_action(self.txt_content)
             self.txt_content._textbox.event_generate("<<Cut>>")
+            record_history_after_action(self.txt_content)
             self._on_text_modified()
         except Exception:
             pass
@@ -939,6 +952,7 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self.is_editing = True
         self.txt_content.configure(state="normal")
         clear_search_highlights(self.txt_content)
+        reset_undo_stack(self.txt_content)
 
         self.title(f"Editando Anotação - {self.date_br}")
         self.lbl_mode_badge.configure(

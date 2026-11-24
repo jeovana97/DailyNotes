@@ -5,7 +5,7 @@ import os
 import sys
 
 
-def read_version_file(default: str = "1.6.0") -> str:
+def read_version_file(default: str = "1.7.0") -> str:
     """Lê a versão atual a partir do arquivo VERSION (suporta execução normal e PyInstaller)."""
     candidates = []
     if getattr(sys, "frozen", False):

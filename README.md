@@ -1,6 +1,6 @@
 # Diário de Anotações Inteligente (DailyNotes) 📓
 
-**Versão atual:** `1.6.0`
+**Versão atual:** `1.7.0`
 
 O **Diário de Anotações Inteligente (DailyNotes)** é um sistema desktop completo para Windows, desenvolvido em **Python** e **CustomTkinter**, projetado para centralizar, organizar e consultar tanto **anotações diárias por data** quanto **notas técnicas/permanentes organizadas em pastas e subpastas**.
 
@@ -14,8 +14,8 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **Registro Diário Organizado:** Uma anotação centralizada para cada data do calendário por usuário, evitando arquivos duplicados.
 - **Navegação Rápida:** Botões **◀ Anterior**, **📅 Hoje** e **Próximo ▶** para alternar rapidamente entre os dias.
 - **Salvamento Manual e Automático:** Botão **💾 Salvar (Ctrl+S)** e chave de **Salvamento Automático** após segundos de inatividade, com indicador de status em tempo real (`🟢 Salvo`, `⚪ Alterações não salvas *`).
-- **Formatação de Texto (Fonte, Tamanho, Negrito, Sublinhado, Riscado, MAIÚSCULO, minúsculo, XML e SQL com Cores):**
-  - **Fonte, Tamanho e Estilos (`B`, `U`, `S`):** Selecione a família da fonte, o tamanho e combine **Negrito (`Ctrl+B`)**, **Sublinhado (`Ctrl+U`)** e **Riscado** sobre trechos selecionados ou no texto inteiro, com persistência automática sem afetar a pesquisa FTS5 ou a exportação.
+- **Formatação de Texto (Fonte, Tamanho, Negrito, Itálico, Sublinhado, Riscado, MAIÚSCULO, minúsculo, XML e SQL com Cores):**
+  - **Fonte, Tamanho e Estilos (`B`, `I`, `U`, `S`):** Selecione a família da fonte, o tamanho e combine **Negrito (`Ctrl+B`)**, **Itálico (`Ctrl+I`)**, **Sublinhado (`Ctrl+U`)** e **Riscado** sobre trechos selecionados ou no texto inteiro, com persistência automática sem afetar a pesquisa FTS5 ou a exportação, e suporte completo a **Desfazer (`Ctrl+Z`) / Refazer (`Ctrl+Y`)** para todas as edições e botões de ação.
   - **🔠 MAIÚSCULO** e **🔡 minúsculo:** Selecione qualquer trecho no texto (ou no título da nota) e converta instantaneamente para letras maiúsculas ou minúsculas.
   - **</> XML (Cor)** e **🗄️ SQL (Cor):** Formata (indenta tags XML ou padroniza cláusulas/comandos SQL) e aplica **destaque de sintaxe colorido** (tags, atributos, valores, comandos `SELECT`, `FROM`, `WHERE`, `JOIN`, funções, strings e comentários).
 - **Colagem Inteligente:** Ao colar qualquer texto (`Ctrl+V` ou menu do botão direito **📄 Colar**), o cursor é posicionado automaticamente no final do texto e a tela rola para exibir a última informação colada.
@@ -26,7 +26,7 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 ### 2. 🗂️ Notas & Pastas (Notas sem Vínculo com Datas)
 - **Organização Livre por Assunto:** Ideal para guardar scripts SQL, senhas, leiautes XML, procedimentos, links úteis e anotações de referência permanente.
 - **Pastas e Subpastas Ilimitadas:** Crie pastas principais e subpastas aninhadas, renomeie ou exclua pastas facilmente.
-- **Formatação Rica, Cores XML/SQL e Conversão de Caixa:** Barra de ferramentas integrada com seletores de **Fonte** e **Tamanho**, botões **Negrito (`B`)**, **Sublinhado (`U`)**, **Riscado (`S`)**, **🔠 MAIÚSCULO**, **🔡 minúsculo**, **</> XML (Cor)**, **🗄️ SQL (Cor)** e **🎨 Limpar Cor**, além de detecção automática de cores ao abrir notas com XML ou SQL.
+- **Formatação Rica, Cores XML/SQL e Conversão de Caixa:** Barra de ferramentas integrada com seletores de **Fonte** e **Tamanho**, botões **Negrito (`B`)**, **Itálico (`I`)**, **Sublinhado (`U`)**, **Riscado (`S`)**, **🔠 MAIÚSCULO**, **🔡 minúsculo**, **</> XML (Cor)**, **🗄️ SQL (Cor)** e **🎨 Limpar Cor**, com histórico unificado de **Desfazer (`Ctrl+Z`) / Refazer (`Ctrl+Y`)** e detecção automática de cores ao abrir notas com XML ou SQL.
 - **Importação Direta para Pastas:** Botão **📥 Importar TXT** para importar arquivos `.txt` com qualquer nome (sem precisar de formato de data), perguntando em qual pasta deseja colocar a nota ou permitindo criar uma nova pasta na hora.
 - **Mover Nota de Pasta:** Mova qualquer nota entre pastas pelo seletor no topo do editor, pelo botão **📂 Mover** ou pelo menu de opções (`⋯` / clique direito na nota).
 - **Pesquisa Exclusiva por Nome da Nota:** Possui barra de busca própria no topo da árvore lateral que filtra instantaneamente pelo título da nota (mantendo essas notas isoladas da Pesquisa Avançada do Diário).

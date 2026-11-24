@@ -7,6 +7,18 @@ e este projeto adere ao [Semantic Versioning (SemVer)](https://semver.org/lang/p
 
 ---
 
+## [1.7.0] - 2026-11-24
+### Added
+- Suporte e botão **Itálico (`I` / `Ctrl+I`)** no **Diário do Dia**, em **Notas & Pastas** e na janela de leitura/edição (`DiaryNoteReaderDialog`), combinável com Fonte, Tamanho, Negrito, Sublinhado e Riscado com persistência em `formatting_json`.
+- Gerenciador unificado de histórico (`utils/editor_history.py` — `EditorHistoryManager`) com snapshots completos de texto, formatação rica, coloração XML/SQL, cursor e seleção.
+
+### Fixed
+- Corrigido o **Desfazer (`Ctrl+Z` / `↩️`)** e **Refazer (`Ctrl+Y` / `Ctrl+Shift+Z` / `↪️`)** para desfazer e refazer passo a passo todas as ações dos botões da barra (troca de fonte, tamanho da fonte, negrito, itálico, sublinhado, riscado, MAIÚSCULO/minúsculo, formatação/coloração XML e SQL, limpar cores e nova anotação) além de qualquer edição de texto (digitação, colagem, recorte e substituição ortográfica) no Diário, Notas & Pastas e janela de leitura/edição.
+- Corrigido o aumento indevido no tamanho da fonte ao aplicar **Negrito (`B`)** (e Itálico), alinhando o cálculo da fonte em pixels negativos escalados pelo DPI (`-round(size * scaling)`) com o padrão interno do `CTkFont`.
+- Garantido o retorno imediato do foco ao editor após seleção em dropdowns (`CTkComboBox`) de fonte/tamanho e ações da barra para que `Ctrl+Z` responda de imediato.
+
+---
+
 ## [1.6.0] - 2026-11-22
 ### Added
 - Formatação rica de texto no **Diário do Dia**, em **Notas & Pastas** e na janela de leitura/edição (`DiaryNoteReaderDialog`): seletores de **Fonte** e **Tamanho**, além de botões combináveis de **Negrito (`B` / `Ctrl+B`)**, **Sublinhado (`U` / `Ctrl+U`)** e **Riscado (`S`)**, aplicáveis tanto sobre texto selecionado quanto globalmente/durante a digitação contínua.

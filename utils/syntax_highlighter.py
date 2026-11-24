@@ -4,6 +4,14 @@ import tkinter as tk
 from typing import Optional, Tuple, List, Callable
 import customtkinter as ctk
 
+from utils.editor_history import (
+    attach_editor_history,
+    get_editor_history,
+    commit_history_before_action,
+    record_history_after_action,
+    reset_editor_history,
+)
+
 
 # Paleta de cores para Syntax Highlighting (Modo Claro, Modo Escuro)
 SYNTAX_COLORS = {
@@ -143,11 +151,17 @@ def convert_selection_case(
 
         converted = selected_text.upper() if uppercase else selected_text.lower()
         if converted != selected_text:
-            # Preserva tags existentes no trecho e registra separador de Undo (Ctrl+Z)
-            active_tags = [
-                t for t in text_widget.tag_names(start_idx)
-                if t not in ("sel", "spelling_error")
-            ]
+            commit_history_before_action(ctk_textbox)
+            # Preserva tags por caractere (mantém trechos parciais de negrito/itálico/fonte)
+            per_char_tags: List[Tuple[int, List[str]]] = []
+            for offset in range(len(selected_text)):
+                c_idx = f"{start_idx} + {offset} chars"
+                c_tags = [
+                    t for t in text_widget.tag_names(c_idx)
+                    if t not in ("sel", "spelling_error")
+                ]
+                if c_tags:
+                    per_char_tags.append((offset, c_tags))
             try:
                 text_widget.edit_separator()
             except Exception:
@@ -159,11 +173,16 @@ def convert_selection_case(
             except Exception:
                 pass
             new_end_idx = f"{start_idx} + {len(converted)} chars"
-            for t in active_tags:
-                text_widget.tag_add(t, start_idx, new_end_idx)
+            for offset, c_tags in per_char_tags:
+                if offset < len(converted):
+                    c_start = f"{start_idx} + {offset} chars"
+                    c_end = f"{start_idx} + {offset + 1} chars"
+                    for t in c_tags:
+                        text_widget.tag_add(t, c_start, c_end)
             text_widget.tag_add("sel", start_idx, new_end_idx)
             text_widget.mark_set("insert", new_end_idx)
             text_widget.focus_set()
+            record_history_after_action(ctk_textbox)
         else:
             text_widget.tag_add("sel", start_idx, end_idx)
 
@@ -426,6 +445,7 @@ def format_and_highlight_xml(ctk_textbox: ctk.CTkTextbox, indent_xml: bool = Tru
     """
     Formata (indenta) e aplica coloração XML ao trecho selecionado
     ou a todo o texto caso não haja seleção.
+    Registra a ação no histórico unificado para permitir Ctrl+Z (Desfazer).
     """
     text_widget = ctk_textbox._textbox
     sel_ranges = text_widget.tag_ranges("sel")
@@ -436,6 +456,8 @@ def format_and_highlight_xml(ctk_textbox: ctk.CTkTextbox, indent_xml: bool = Tru
         raw = text_widget.get(start_idx, end_idx)
         if not raw.strip():
             return False
+        if indent_xml:
+            commit_history_before_action(ctk_textbox)
         formatted = format_xml_string(raw) if indent_xml else raw
         if formatted != raw:
             try:
@@ -451,11 +473,19 @@ def format_and_highlight_xml(ctk_textbox: ctk.CTkTextbox, indent_xml: bool = Tru
             end_idx = f"{start_idx} + {len(formatted)} chars"
             text_widget.tag_add("sel", start_idx, end_idx)
         highlight_xml_range(text_widget, start_idx, end_idx)
+        if indent_xml:
+            record_history_after_action(ctk_textbox)
+            try:
+                text_widget.focus_set()
+            except Exception:
+                pass
         return True
     else:
         raw = text_widget.get("1.0", "end-1c")
         if not raw.strip():
             return False
+        if indent_xml:
+            commit_history_before_action(ctk_textbox)
         if indent_xml and _RE_HAS_XML.search(raw):
             formatted = format_xml_string(raw)
             if formatted != raw:
@@ -470,6 +500,12 @@ def format_and_highlight_xml(ctk_textbox: ctk.CTkTextbox, indent_xml: bool = Tru
                 except Exception:
                     pass
         highlight_xml_range(text_widget, "1.0", "end-1c")
+        if indent_xml:
+            record_history_after_action(ctk_textbox)
+            try:
+                text_widget.focus_set()
+            except Exception:
+                pass
         return True
 
 
@@ -477,6 +513,7 @@ def format_and_highlight_sql(ctk_textbox: ctk.CTkTextbox, format_keywords: bool 
     """
     Formata (padroniza palavras-chave em maiúsculo e estrutura cláusulas) e aplica
     coloração SQL ao trecho selecionado ou a todo o texto caso não haja seleção.
+    Registra a ação no histórico unificado para permitir Ctrl+Z (Desfazer).
     """
     text_widget = ctk_textbox._textbox
     sel_ranges = text_widget.tag_ranges("sel")
@@ -487,6 +524,8 @@ def format_and_highlight_sql(ctk_textbox: ctk.CTkTextbox, format_keywords: bool 
         raw = text_widget.get(start_idx, end_idx)
         if not raw.strip():
             return False
+        if format_keywords:
+            commit_history_before_action(ctk_textbox)
         formatted = format_sql_string(raw) if format_keywords else raw
         if formatted != raw:
             try:
@@ -502,11 +541,19 @@ def format_and_highlight_sql(ctk_textbox: ctk.CTkTextbox, format_keywords: bool 
             end_idx = f"{start_idx} + {len(formatted)} chars"
             text_widget.tag_add("sel", start_idx, end_idx)
         highlight_sql_range(text_widget, start_idx, end_idx)
+        if format_keywords:
+            record_history_after_action(ctk_textbox)
+            try:
+                text_widget.focus_set()
+            except Exception:
+                pass
         return True
     else:
         raw = text_widget.get("1.0", "end-1c")
         if not raw.strip():
             return False
+        if format_keywords:
+            commit_history_before_action(ctk_textbox)
         formatted = format_sql_string(raw) if format_keywords else raw
         if formatted != raw:
             try:
@@ -520,6 +567,12 @@ def format_and_highlight_sql(ctk_textbox: ctk.CTkTextbox, format_keywords: bool 
             except Exception:
                 pass
         highlight_sql_range(text_widget, "1.0", "end-1c")
+        if format_keywords:
+            record_history_after_action(ctk_textbox)
+            try:
+                text_widget.focus_set()
+            except Exception:
+                pass
         return True
 
 
@@ -528,9 +581,13 @@ def perform_undo(
     on_change_callback: Optional[Callable[[], None]] = None,
 ) -> bool:
     """
-    Executa o Desfazer (Ctrl+Z) no editor de texto de forma segura,
-    reaplicando realce de sintaxe e atualizando contadores/status.
+    Executa o Desfazer (Ctrl+Z) no editor de texto usando o histórico unificado
+    (desfazendo texto, fonte, tamanho, negrito, itálico, sublinhado, riscado, XML, SQL, etc.).
     """
+    mgr = get_editor_history(ctk_textbox)
+    if mgr is not None:
+        return mgr.undo(override_callback=on_change_callback)
+
     text_widget = ctk_textbox._textbox
     try:
         if str(text_widget.cget("state")) == "disabled":
@@ -558,9 +615,12 @@ def perform_redo(
     on_change_callback: Optional[Callable[[], None]] = None,
 ) -> bool:
     """
-    Executa o Refazer (Ctrl+Y) no editor de texto de forma segura,
-    reaplicando realce de sintaxe e atualizando contadores/status.
+    Executa o Refazer (Ctrl+Y) no editor de texto usando o histórico unificado.
     """
+    mgr = get_editor_history(ctk_textbox)
+    if mgr is not None:
+        return mgr.redo(override_callback=on_change_callback)
+
     text_widget = ctk_textbox._textbox
     try:
         if str(text_widget.cget("state")) == "disabled":
@@ -586,8 +646,9 @@ def perform_redo(
 def reset_undo_stack(ctk_textbox: ctk.CTkTextbox) -> None:
     """
     Limpa o histórico de Undo/Redo após carregar uma nota do banco,
-    evitando que o Ctrl+Z apague o texto original carregado.
+    definindo o estado carregado (texto + formatação + sintaxe) como ponto inicial.
     """
+    reset_editor_history(ctk_textbox)
     try:
         ctk_textbox._textbox.edit_reset()
     except Exception:
@@ -599,14 +660,16 @@ def enable_undo_redo(
     on_change_callback: Optional[Callable[[], None]] = None,
 ) -> None:
     """
-    Habilita e configura a pilha de Desfazer (Ctrl+Z) e Refazer (Ctrl+Y) no CTkTextbox,
-    criando separadores automáticos ao digitar palavras/linhas e ao colar texto.
+    Habilita e configura a pilha unificada de Desfazer (Ctrl+Z) e Refazer (Ctrl+Y)
+    no CTkTextbox, cobrindo digitação, colagem, recorte e todos os botões de ação.
     """
     text_widget = ctk_textbox._textbox
     try:
         text_widget.configure(undo=True, autoseparators=True, maxundo=-1)
     except Exception:
         pass
+
+    attach_editor_history(ctk_textbox, on_change_callback=on_change_callback)
 
     def _on_undo_event(_event=None):
         perform_undo(ctk_textbox, on_change_callback)
@@ -616,21 +679,14 @@ def enable_undo_redo(
         perform_redo(ctk_textbox, on_change_callback)
         return "break"
 
-    def _on_word_boundary_key(event):
-        # Cria um ponto de parada no Undo a cada palavra/linha digitada
-        if event.keysym in ("space", "Return", "KP_Enter", "Tab", "BackSpace", "Delete", "period", "comma", "semicolon"):
-            try:
-                text_widget.edit_separator()
-            except Exception:
-                pass
-
     text_widget.bind("<<Undo>>", _on_undo_event)
     text_widget.bind("<Control-z>", _on_undo_event)
     text_widget.bind("<Control-Z>", _on_undo_event)
     text_widget.bind("<<Redo>>", _on_redo_event)
     text_widget.bind("<Control-y>", _on_redo_event)
     text_widget.bind("<Control-Y>", _on_redo_event)
-    text_widget.bind("<KeyPress>", _on_word_boundary_key, add="+")
+    text_widget.bind("<Control-Shift-z>", _on_redo_event)
+    text_widget.bind("<Control-Shift-Z>", _on_redo_event)
 
 
 def auto_highlight_content(ctk_textbox: ctk.CTkTextbox) -> Optional[str]:

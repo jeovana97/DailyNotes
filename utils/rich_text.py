@@ -2,8 +2,10 @@
 Motor de Formatação Rica (Rich Text) para editores CTkTextbox (Tkinter tk.Text).
 Suporta:
 - Seleção de Fonte (família) e Tamanho (por trecho selecionado ou documento inteiro)
-- Negrito (bold), Sublinhado (underline) e Riscado (overstrike) — combináveis entre si
+- Negrito (bold), Itálico (italic), Sublinhado (underline) e Riscado (overstrike) — combináveis entre si
 - Digitação contínua com estilos ativos quando não há seleção
+- Escala de fonte em pixels negativos idêntica ao CustomTkinter (evita mudança de tamanho ao ativar Negrito/Itálico)
+- Integração com EditorHistoryManager para Desfazer (Ctrl+Z) e Refazer (Ctrl+Y)
 - Serialização e restauração em JSON (formatting_json), mantendo o texto puro intacto no SQLite
 """
 
@@ -14,6 +16,10 @@ from typing import Optional, Callable, Dict, List, Tuple, Any
 import customtkinter as ctk
 
 import config
+from utils.editor_history import (
+    commit_history_before_action,
+    record_history_after_action,
+)
 
 
 AVAILABLE_FONTS: List[str] = [
@@ -36,6 +42,7 @@ DEFAULT_FONT_FAMILY = "Segoe UI"
 DEFAULT_FONT_SIZE = 15
 
 TAG_BOLD = "rt_bold"
+TAG_ITALIC = "rt_italic"
 TAG_UNDERLINE = "rt_underline"
 TAG_OVERSTRIKE = "rt_overstrike"
 TAG_FAMILY_PREFIX = "rt_family::"
@@ -46,7 +53,7 @@ TAG_COMP_PREFIX = "rt_comp::"
 class RichTextController:
     """
     Controlador de formatação rica acoplado a um CTkTextbox.
-    Permite combinar Fonte + Tamanho + Negrito + Sublinhado + Riscado no mesmo trecho
+    Permite combinar Fonte + Tamanho + Negrito + Itálico + Sublinhado + Riscado no mesmo trecho
     sem conflitar com destaque de sintaxe XML/SQL ou destaque de busca F3.
     """
 
@@ -61,6 +68,9 @@ class RichTextController:
         self.tb = ctk_textbox._textbox
         self.on_change_callback = on_change_callback
 
+        # Expõe o controlador no CTkTextbox para integração com o EditorHistoryManager
+        self.ctk_textbox._rich_text = self
+
         self.default_family = default_family
         self.default_size = default_size
         self.base_family = default_family
@@ -68,6 +78,7 @@ class RichTextController:
 
         # Estados de digitação quando não há texto selecionado
         self.typing_bold = False
+        self.typing_italic = False
         self.typing_underline = False
         self.typing_overstrike = False
 
@@ -75,10 +86,11 @@ class RichTextController:
         self._combo_font: Optional[ctk.CTkComboBox] = None
         self._combo_size: Optional[ctk.CTkComboBox] = None
         self._btn_bold: Optional[ctk.CTkButton] = None
+        self._btn_italic: Optional[ctk.CTkButton] = None
         self._btn_underline: Optional[ctk.CTkButton] = None
         self._btn_overstrike: Optional[ctk.CTkButton] = None
 
-        self._font_cache: Dict[Tuple[str, int, bool], tkfont.Font] = {}
+        self._font_cache: Dict[Tuple[str, int, bool, bool, float], tkfont.Font] = {}
         self._pre_key_index: Optional[str] = None
         self._suppress_sync = False
 
@@ -95,6 +107,7 @@ class RichTextController:
         combo_font: Optional[ctk.CTkComboBox] = None,
         combo_size: Optional[ctk.CTkComboBox] = None,
         btn_bold: Optional[ctk.CTkButton] = None,
+        btn_italic: Optional[ctk.CTkButton] = None,
         btn_underline: Optional[ctk.CTkButton] = None,
         btn_overstrike: Optional[ctk.CTkButton] = None,
     ):
@@ -102,6 +115,7 @@ class RichTextController:
         self._combo_font = combo_font
         self._combo_size = combo_size
         self._btn_bold = btn_bold
+        self._btn_italic = btn_italic
         self._btn_underline = btn_underline
         self._btn_overstrike = btn_overstrike
         self.sync_toolbar_state()
@@ -120,17 +134,36 @@ class RichTextController:
 
         self.tb.bind("<Control-b>", lambda _e: (self.toggle_bold(), "break")[1])
         self.tb.bind("<Control-B>", lambda _e: (self.toggle_bold(), "break")[1])
+        self.tb.bind("<Control-i>", lambda _e: (self.toggle_italic(), "break")[1])
+        self.tb.bind("<Control-I>", lambda _e: (self.toggle_italic(), "break")[1])
         self.tb.bind("<Control-u>", lambda _e: (self.toggle_underline(), "break")[1])
         self.tb.bind("<Control-U>", lambda _e: (self.toggle_underline(), "break")[1])
 
-    def _get_tk_font(self, family: str, size: int, is_bold: bool) -> tkfont.Font:
-        key = (family, int(size), bool(is_bold))
+    def _get_widget_scaling(self) -> float:
+        try:
+            scaling = float(self.ctk_textbox._get_widget_scaling())
+            return scaling if scaling > 0 else 1.0
+        except Exception:
+            return 1.0
+
+    def _get_scaled_pixel_size(self, size: int) -> int:
+        """
+        Calcula o tamanho da fonte em pixels negativos exatamente como CTkFont.create_scaled_tuple(),
+        garantindo que Negrito/Itálico/Fonte nunca alterem a altura visual da fonte.
+        """
+        scaling = self._get_widget_scaling()
+        return -max(1, round(int(size) * scaling))
+
+    def _get_tk_font(self, family: str, size: int, is_bold: bool, is_italic: bool = False) -> tkfont.Font:
+        scaling = round(self._get_widget_scaling(), 3)
+        key = (family, int(size), bool(is_bold), bool(is_italic), scaling)
         if key not in self._font_cache:
             self._font_cache[key] = tkfont.Font(
                 root=self.tb,
                 family=family,
-                size=int(size),
+                size=self._get_scaled_pixel_size(size),
                 weight="bold" if is_bold else "normal",
+                slant="italic" if is_italic else "roman",
             )
         return self._font_cache[key]
 
@@ -176,7 +209,7 @@ class RichTextController:
 
     def _recompute_composite_fonts(self, start: str, end: str):
         """
-        Recalcula as tags compostas de fonte (family + size + bold) no intervalo [start, end)
+        Recalcula as tags compostas de fonte (family + size + bold + italic) no intervalo [start, end)
         agrupando caracteres contíguos com a mesma combinação em runs eficientes.
         """
         s_idx = self.tb.index(start)
@@ -187,10 +220,12 @@ class RichTextController:
         # Remove tags compostas antigas neste intervalo
         self._clear_prefix_tags_in_range(TAG_COMP_PREFIX, s_idx, e_idx)
 
-        # Verifica se há alguma tag de fonte/tamanho/negrito no texto antes de iterar
+        # Verifica se há alguma tag de fonte/tamanho/negrito/itálico no texto antes de iterar
         all_tags = self.tb.tag_names()
         has_any_font_tag = any(
-            t == TAG_BOLD or t.startswith(TAG_FAMILY_PREFIX) or t.startswith(TAG_SIZE_PREFIX)
+            t in (TAG_BOLD, TAG_ITALIC)
+            or t.startswith(TAG_FAMILY_PREFIX)
+            or t.startswith(TAG_SIZE_PREFIX)
             for t in all_tags
         )
         if not has_any_font_tag:
@@ -198,17 +233,17 @@ class RichTextController:
 
         cur = s_idx
         run_start = cur
-        prev_key: Optional[Tuple[str, int, bool]] = None
+        prev_key: Optional[Tuple[str, int, bool, bool]] = None
 
-        def _flush_run(r_start: str, r_end: str, f_key: Optional[Tuple[str, int, bool]]):
+        def _flush_run(r_start: str, r_end: str, f_key: Optional[Tuple[str, int, bool, bool]]):
             if f_key is None:
                 return
-            fam, sz, bld = f_key
-            # Se coincide exatamente com a fonte base sem negrito, não precisa de tag composta
-            if fam == self.base_family and sz == self.base_size and not bld:
+            fam, sz, bld, itl = f_key
+            # Se coincide exatamente com a fonte base normal, não precisa de tag composta
+            if fam == self.base_family and sz == self.base_size and not bld and not itl:
                 return
-            comp_tag = f"{TAG_COMP_PREFIX}{fam}::{sz}::{1 if bld else 0}"
-            self.tb.tag_configure(comp_tag, font=self._get_tk_font(fam, sz, bld))
+            comp_tag = f"{TAG_COMP_PREFIX}{fam}::{sz}::{1 if bld else 0}::{1 if itl else 0}"
+            self.tb.tag_configure(comp_tag, font=self._get_tk_font(fam, sz, bld, itl))
             self.tb.tag_add(comp_tag, r_start, r_end)
             try:
                 self.tb.tag_raise(comp_tag)
@@ -220,9 +255,12 @@ class RichTextController:
             fam = self.base_family
             sz = self.base_size
             bld = False
+            itl = False
             for t in tags_here:
                 if t == TAG_BOLD:
                     bld = True
+                elif t == TAG_ITALIC:
+                    itl = True
                 elif t.startswith(TAG_FAMILY_PREFIX):
                     fam = t[len(TAG_FAMILY_PREFIX):]
                 elif t.startswith(TAG_SIZE_PREFIX):
@@ -230,7 +268,7 @@ class RichTextController:
                         sz = int(t[len(TAG_SIZE_PREFIX):])
                     except ValueError:
                         pass
-            key = (fam, sz, bld)
+            key = (fam, sz, bld, itl)
             if prev_key is None:
                 prev_key = key
                 run_start = cur
@@ -256,6 +294,9 @@ class RichTextController:
     def toggle_bold(self):
         self._toggle_flag(TAG_BOLD, "typing_bold", recompute_font=True)
 
+    def toggle_italic(self):
+        self._toggle_flag(TAG_ITALIC, "typing_italic", recompute_font=True)
+
     def toggle_underline(self):
         self._toggle_flag(TAG_UNDERLINE, "typing_underline", recompute_font=False)
 
@@ -268,6 +309,7 @@ class RichTextController:
 
         sel = self._get_selection()
         if sel:
+            commit_history_before_action(self.ctk_textbox)
             start, end = sel
             already_on = self._range_fully_has_tag(tag_name, start, end)
             if already_on:
@@ -277,6 +319,7 @@ class RichTextController:
             if recompute_font:
                 self._recompute_composite_fonts(start, end)
             setattr(self, typing_attr, not already_on)
+            record_history_after_action(self.ctk_textbox)
             self._notify_changed()
         else:
             setattr(self, typing_attr, not getattr(self, typing_attr))
@@ -290,6 +333,7 @@ class RichTextController:
     def apply_font_family(self, family: str):
         if not self._is_editable() or not family:
             return
+        commit_history_before_action(self.ctk_textbox)
         sel = self._get_selection()
         if sel:
             start, end = sel
@@ -302,12 +346,10 @@ class RichTextController:
             self._apply_base_font()
             self._recompute_composite_fonts("1.0", "end-1c")
 
+        record_history_after_action(self.ctk_textbox)
         self._notify_changed()
         self.sync_toolbar_state()
-        try:
-            self.ctk_textbox.focus_set()
-        except Exception:
-            pass
+        self._refocus_textbox()
 
     def apply_font_size(self, size_val: Any):
         if not self._is_editable():
@@ -317,6 +359,7 @@ class RichTextController:
         except Exception:
             return
 
+        commit_history_before_action(self.ctk_textbox)
         sel = self._get_selection()
         if sel:
             start, end = sel
@@ -329,10 +372,17 @@ class RichTextController:
             self._apply_base_font()
             self._recompute_composite_fonts("1.0", "end-1c")
 
+        record_history_after_action(self.ctk_textbox)
         self._notify_changed()
         self.sync_toolbar_state()
+        self._refocus_textbox()
+
+    def _refocus_textbox(self):
+        """Devolve foco ao editor imediatamente e após o fechamento de dropdowns (CTkComboBox)."""
         try:
-            self.ctk_textbox.focus_set()
+            self.tb.focus_set()
+            if self.tb.winfo_exists():
+                self.tb.after(15, lambda: self.tb.focus_set() if self.tb.winfo_exists() else None)
         except Exception:
             pass
 
@@ -342,6 +392,9 @@ class RichTextController:
 
     def _on_key_press(self, event):
         if not self._is_editable():
+            return
+        if event.state & 0x4:
+            self._pre_key_index = None
             return
         if event.char and (event.char.isprintable() or event.char in ("\r", "\n", "\t")):
             try:
@@ -365,6 +418,11 @@ class RichTextController:
                     else:
                         self.tb.tag_remove(TAG_BOLD, pre, post)
 
+                    if self.typing_italic:
+                        self.tb.tag_add(TAG_ITALIC, pre, post)
+                    else:
+                        self.tb.tag_remove(TAG_ITALIC, pre, post)
+
                     if self.typing_underline:
                         self.tb.tag_add(TAG_UNDERLINE, pre, post)
                     else:
@@ -376,7 +434,7 @@ class RichTextController:
                         self.tb.tag_remove(TAG_OVERSTRIKE, pre, post)
 
                     # Sempre recalcula o intervalo digitado (1 char) para também limpar
-                    # tags compostas herdadas quando o usuário desativa o negrito
+                    # tags compostas herdadas quando o usuário desativa negrito/itálico
                     self._recompute_composite_fonts(pre, post)
             except Exception:
                 pass
@@ -384,7 +442,7 @@ class RichTextController:
             self.sync_toolbar_state()
 
     def sync_toolbar_state(self):
-        """Atualiza os seletores de fonte/tamanho e o destaque de B/U/S conforme a posição atual."""
+        """Atualiza os seletores de fonte/tamanho e o destaque de B/I/U/S conforme a posição atual."""
         if self._suppress_sync:
             return
         try:
@@ -395,6 +453,7 @@ class RichTextController:
             fam = self.base_family
             sz = self.base_size
             is_bold = TAG_BOLD in tags
+            is_italic = TAG_ITALIC in tags
             is_under = TAG_UNDERLINE in tags
             is_strike = TAG_OVERSTRIKE in tags
 
@@ -408,6 +467,7 @@ class RichTextController:
                         pass
 
             self.typing_bold = is_bold
+            self.typing_italic = is_italic
             self.typing_underline = is_under
             self.typing_overstrike = is_strike
 
@@ -425,6 +485,7 @@ class RichTextController:
     def _update_button_highlights(self):
         mapping = [
             (self._btn_bold, self.typing_bold),
+            (self._btn_italic, self.typing_italic),
             (self._btn_underline, self.typing_underline),
             (self._btn_overstrike, self.typing_overstrike),
         ]
@@ -463,12 +524,13 @@ class RichTextController:
         self.base_family = self.default_family
         self.base_size = self.default_size
         self.typing_bold = False
+        self.typing_italic = False
         self.typing_underline = False
         self.typing_overstrike = False
 
         try:
             for tag in list(self.tb.tag_names()):
-                if tag in (TAG_BOLD, TAG_UNDERLINE, TAG_OVERSTRIKE) or tag.startswith(
+                if tag in (TAG_BOLD, TAG_ITALIC, TAG_UNDERLINE, TAG_OVERSTRIKE) or tag.startswith(
                     (TAG_FAMILY_PREFIX, TAG_SIZE_PREFIX, TAG_COMP_PREFIX)
                 ):
                     self.tb.tag_remove(tag, "1.0", "end")
@@ -489,6 +551,8 @@ class RichTextController:
                 logical_name: Optional[str] = None
                 if tag == TAG_BOLD:
                     logical_name = "bold"
+                elif tag == TAG_ITALIC:
+                    logical_name = "italic"
                 elif tag == TAG_UNDERLINE:
                     logical_name = "underline"
                 elif tag == TAG_OVERSTRIKE:
@@ -559,6 +623,8 @@ class RichTextController:
                     continue
                 if t_logical == "bold":
                     self.tb.tag_add(TAG_BOLD, s, e)
+                elif t_logical == "italic":
+                    self.tb.tag_add(TAG_ITALIC, s, e)
                 elif t_logical == "underline":
                     self.tb.tag_add(TAG_UNDERLINE, s, e)
                 elif t_logical == "overstrike":

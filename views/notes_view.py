@@ -20,6 +20,10 @@ from utils.rich_text import (
     DEFAULT_FONT_FAMILY,
     DEFAULT_FONT_SIZE,
 )
+from utils.editor_history import (
+    commit_history_before_action,
+    record_history_after_action,
+)
 from utils.syntax_highlighter import (
     convert_selection_case,
     format_and_highlight_xml,
@@ -1158,6 +1162,18 @@ class NotesView(ctk.CTkFrame):
             font_weight="bold",
         )
 
+        self.btn_italic = self.responsive_format_bar.add_button(
+            key="italic",
+            symbol_text="I",
+            full_label="Itálico (Ctrl+I)",
+            command=lambda: self.rich_text.toggle_italic() if hasattr(self, "rich_text") else None,
+            width=32,
+            height=28,
+            font_size=13,
+            font_weight="bold",
+            font_slant="italic",
+        )
+
         self.btn_underline = self.responsive_format_bar.add_button(
             key="underline",
             symbol_text="U",
@@ -1266,6 +1282,7 @@ class NotesView(ctk.CTkFrame):
             combo_font=self.combo_font_family,
             combo_size=self.combo_font_size,
             btn_bold=self.btn_bold,
+            btn_italic=self.btn_italic,
             btn_underline=self.btn_underline,
             btn_overstrike=self.btn_overstrike,
         )
@@ -1913,7 +1930,6 @@ class NotesView(ctk.CTkFrame):
             self.active_note = None
             self.entry_title.delete(0, "end")
             self.txt_content.delete("1.0", "end")
-            reset_undo_stack(self.txt_content)
             self._refresh_folder_combo(folder_id)
             self.has_unsaved_changes = False
             self.lbl_save_status.configure(
@@ -1925,6 +1941,7 @@ class NotesView(ctk.CTkFrame):
             clear_syntax_tags(self.txt_content._textbox)
             if hasattr(self, "rich_text"):
                 self.rich_text.reset()
+            reset_undo_stack(self.txt_content)
         finally:
             self._suppress_change_events = False
 
@@ -1965,10 +1982,10 @@ class NotesView(ctk.CTkFrame):
 
             self.txt_content.delete("1.0", "end")
             self.txt_content.insert("1.0", fresh_note.content or "")
-            reset_undo_stack(self.txt_content)
             auto_highlight_content(self.txt_content)
             if hasattr(self, "rich_text"):
                 self.rich_text.load(getattr(fresh_note, "formatting_json", ""))
+            reset_undo_stack(self.txt_content)
 
             self._refresh_folder_combo(fresh_note.folder_id)
             self.has_unsaved_changes = False
@@ -2385,11 +2402,14 @@ class NotesView(ctk.CTkFrame):
     def _on_clear_syntax_colors_clicked(self):
         """Remove a coloração de sintaxe XML/SQL do trecho selecionado ou de todo o texto."""
         tb = self.txt_content._textbox
+        commit_history_before_action(self.txt_content)
         sel = tb.tag_ranges("sel")
         if sel:
             clear_syntax_tags(tb, tb.index("sel.first"), tb.index("sel.last"))
         else:
             clear_syntax_tags(tb, "1.0", "end")
+        record_history_after_action(self.txt_content)
+        self.txt_content.focus_set()
         self._run_spellcheck()
 
     def _on_undo_clicked(self):
@@ -2403,7 +2423,9 @@ class NotesView(ctk.CTkFrame):
     def _on_cut_clicked(self):
         """Recorta o texto selecionado e registra no histórico de desfazer."""
         try:
+            commit_history_before_action(self.txt_content)
             self.txt_content._textbox.event_generate("<<Cut>>")
+            record_history_after_action(self.txt_content)
             self._on_field_modified()
         except Exception:
             pass
@@ -2443,6 +2465,7 @@ class NotesView(ctk.CTkFrame):
         if not clipboard_text:
             return "break"
 
+        commit_history_before_action(self.txt_content)
         try:
             text_widget.edit_separator()
         except Exception:
@@ -2462,6 +2485,7 @@ class NotesView(ctk.CTkFrame):
             pass
 
         auto_highlight_content(self.txt_content)
+        record_history_after_action(self.txt_content)
         text_widget.mark_set("insert", pasted_end)
         text_widget.see(pasted_end)
         text_widget.update_idletasks()
@@ -2727,6 +2751,7 @@ class NotesView(ctk.CTkFrame):
 
     def _replace_spelling_error(self, start_idx: str, end_idx: str, replacement: str):
         text_widget = self.txt_content._textbox
+        commit_history_before_action(self.txt_content)
         try:
             text_widget.edit_separator()
         except Exception:
@@ -2737,6 +2762,7 @@ class NotesView(ctk.CTkFrame):
             text_widget.edit_separator()
         except Exception:
             pass
+        record_history_after_action(self.txt_content)
         self._on_field_modified()
         self._run_spellcheck()
 

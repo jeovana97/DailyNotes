@@ -26,6 +26,10 @@ from utils.rich_text import (
     DEFAULT_FONT_FAMILY,
     DEFAULT_FONT_SIZE,
 )
+from utils.editor_history import (
+    commit_history_before_action,
+    record_history_after_action,
+)
 from services.spellcheck_service import WindowsSpellCheckService, SpellingError
 from utils.syntax_highlighter import (
     convert_selection_case,
@@ -439,6 +443,18 @@ class DiaryView(ctk.CTkFrame):
             font_weight="bold",
         )
 
+        self.btn_italic = self.responsive_format_bar.add_button(
+            key="italic",
+            symbol_text="I",
+            full_label="Itálico (Ctrl+I)",
+            command=lambda: self.rich_text.toggle_italic() if hasattr(self, "rich_text") else None,
+            width=32,
+            height=28,
+            font_size=13,
+            font_weight="bold",
+            font_slant="italic",
+        )
+
         self.btn_underline = self.responsive_format_bar.add_button(
             key="underline",
             symbol_text="U",
@@ -547,6 +563,7 @@ class DiaryView(ctk.CTkFrame):
             combo_font=self.combo_font_family,
             combo_size=self.combo_font_size,
             btn_bold=self.btn_bold,
+            btn_italic=self.btn_italic,
             btn_underline=self.btn_underline,
             btn_overstrike=self.btn_overstrike,
         )
@@ -614,10 +631,10 @@ class DiaryView(ctk.CTkFrame):
         content = self.active_entry.content or ""
         self.txt_content.delete("1.0", "end")
         self.txt_content.insert("1.0", content)
-        reset_undo_stack(self.txt_content)
         auto_highlight_content(self.txt_content)
         if hasattr(self, "rich_text"):
             self.rich_text.load(getattr(self.active_entry, "formatting_json", ""))
+        reset_undo_stack(self.txt_content)
 
         self.has_unsaved_changes = False
         self._update_status_indicator(saved=True, timestamp=self.active_entry.updated_at)
@@ -779,17 +796,20 @@ class DiaryView(ctk.CTkFrame):
         """Prepara uma nova anotação em branco para a data selecionada."""
         if not self.confirm_discard_if_unsaved():
             return
+        commit_history_before_action(self.txt_content)
         try:
             self.txt_content._textbox.edit_separator()
         except Exception:
             pass
         self.txt_content.delete("1.0", "end")
+        clear_syntax_tags(self.txt_content._textbox)
         if hasattr(self, "rich_text"):
             self.rich_text.reset()
         try:
             self.txt_content._textbox.edit_separator()
         except Exception:
             pass
+        record_history_after_action(self.txt_content)
         self.txt_content.focus_set()
         self._on_text_modified()
 
@@ -1102,6 +1122,7 @@ class DiaryView(ctk.CTkFrame):
     def _replace_spelling_error(self, start_idx: str, end_idx: str, replacement: str):
         """Substitui uma palavra com erro pela sugestão escolhida pelo usuário."""
         text_widget = self.txt_content._textbox
+        commit_history_before_action(self.txt_content)
         try:
             text_widget.edit_separator()
         except Exception:
@@ -1112,6 +1133,7 @@ class DiaryView(ctk.CTkFrame):
             text_widget.edit_separator()
         except Exception:
             pass
+        record_history_after_action(self.txt_content)
         self._on_text_modified()
         self._run_spellcheck()
 
@@ -1172,11 +1194,14 @@ class DiaryView(ctk.CTkFrame):
     def _on_clear_syntax_colors_clicked(self):
         """Remove a coloração de sintaxe XML/SQL do trecho selecionado ou de todo o texto."""
         tb = self.txt_content._textbox
+        commit_history_before_action(self.txt_content)
         sel = tb.tag_ranges("sel")
         if sel:
             clear_syntax_tags(tb, tb.index("sel.first"), tb.index("sel.last"))
         else:
             clear_syntax_tags(tb, "1.0", "end")
+        record_history_after_action(self.txt_content)
+        self.txt_content.focus_set()
         self._run_spellcheck()
 
     def _on_paste(self, event=None):
@@ -1194,6 +1219,7 @@ class DiaryView(ctk.CTkFrame):
         if not clipboard_text:
             return "break"
 
+        commit_history_before_action(self.txt_content)
         try:
             text_widget.edit_separator()
         except Exception:
@@ -1215,6 +1241,7 @@ class DiaryView(ctk.CTkFrame):
             pass
 
         auto_highlight_content(self.txt_content)
+        record_history_after_action(self.txt_content)
 
         # Garante que o cursor permaneça no final da cópia e visível na tela
         text_widget.mark_set("insert", pasted_end)
@@ -1241,7 +1268,9 @@ class DiaryView(ctk.CTkFrame):
     def _on_cut_clicked(self):
         """Recorta o texto selecionado e registra no histórico de desfazer."""
         try:
+            commit_history_before_action(self.txt_content)
             self.txt_content._textbox.event_generate("<<Cut>>")
+            record_history_after_action(self.txt_content)
             self._on_text_modified()
         except Exception:
             pass

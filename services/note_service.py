@@ -401,10 +401,10 @@ class NoteService:
                 FROM notes n
                 LEFT JOIN note_folders f ON n.folder_id = f.id
                 WHERE n.user_id = ?
-                  AND (n.title_normalized LIKE ? OR lower_no_accents(n.title) LIKE ?)
+                  AND instr(n.title_normalized, ?) > 0
                 ORDER BY n.title_normalized ASC, n.title ASC, n.id ASC
                 """,
-                (user_id, f"%{norm_query}%", f"%{norm_query}%"),
+                (user_id, norm_query),
             )
             return [NoteItem.from_row(r) for r in cursor.fetchall()]
         finally:
@@ -476,6 +476,7 @@ class NoteService:
             raise ValueError("Informe um nome/título para salvar a nota.")
 
         norm_title = normalize_text(clean_title)
+        norm_content = normalize_text(content)
         now = get_current_timestamp()
 
         with get_db(self.db_path) as conn:
@@ -493,10 +494,10 @@ class NoteService:
                 fmt_val = formatting_json if formatting_json is not None else ""
                 cursor.execute(
                     """
-                    INSERT INTO notes (user_id, folder_id, title, title_normalized, content, formatting_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO notes (user_id, folder_id, title, title_normalized, content, content_normalized, formatting_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (user_id, folder_id, clean_title, norm_title, content, fmt_val, now, now),
+                    (user_id, folder_id, clean_title, norm_title, content, norm_content, fmt_val, now, now),
                 )
                 target_id = cursor.lastrowid
             else:
@@ -515,10 +516,11 @@ class NoteService:
                             title = ?,
                             title_normalized = ?,
                             content = ?,
+                            content_normalized = ?,
                             updated_at = ?
                         WHERE id = ? AND user_id = ?
                         """,
-                        (folder_id, clean_title, norm_title, content, now, note_id, user_id),
+                        (folder_id, clean_title, norm_title, content, norm_content, now, note_id, user_id),
                     )
                 else:
                     cursor.execute(
@@ -528,11 +530,12 @@ class NoteService:
                             title = ?,
                             title_normalized = ?,
                             content = ?,
+                            content_normalized = ?,
                             formatting_json = ?,
                             updated_at = ?
                         WHERE id = ? AND user_id = ?
                         """,
-                        (folder_id, clean_title, norm_title, content, formatting_json, now, note_id, user_id),
+                        (folder_id, clean_title, norm_title, content, norm_content, formatting_json, now, note_id, user_id),
                     )
                 target_id = note_id
 

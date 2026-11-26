@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 import config
 from models.user import User
-from services.import_service import ImportService, ConflictResolution
+from services.import_service import ImportService, ConflictResolution, SUPPORTED_NOTE_EXTENSIONS
 from services.note_service import NoteService
 from utils.date_utils import format_date_br
 from views.components.dialogs import show_message, ask_confirmation
@@ -65,7 +65,7 @@ class ImportView(ctk.CTkFrame):
 
         self.lbl_title = ctk.CTkLabel(
             self.header_card,
-            text="📥 Importação de Notas TXT para Pastas",
+            text="📥 Importação de Arquivos (TXT, DOC, DOCX, XML, BAT, SQL)",
             font=ctk.CTkFont(size=18, weight="bold"),
             text_color=config.COLORS["text_dark"],
         )
@@ -143,7 +143,7 @@ class ImportView(ctk.CTkFrame):
 
         self.rb_file = ctk.CTkRadioButton(
             self.mode_frame,
-            text="📄 Arquivo(s) TXT (um ou vários, qualquer nome)",
+            text="📄 Arquivo(s) (TXT, DOC, DOCX, XML, BAT, SQL)",
             variable=self.import_mode,
             value="file",
             text_color=config.COLORS["text_dark"],
@@ -153,7 +153,7 @@ class ImportView(ctk.CTkFrame):
 
         self.rb_folder = ctk.CTkRadioButton(
             self.mode_frame,
-            text="📁 Pasta do computador (todos os TXTs da pasta)",
+            text="📁 Pasta do computador (todos os arquivos suportados)",
             variable=self.import_mode,
             value="folder",
             text_color=config.COLORS["text_dark"],
@@ -168,7 +168,7 @@ class ImportView(ctk.CTkFrame):
         self.entry_path = ctk.CTkEntry(
             self.path_frame,
             height=38,
-            placeholder_text="Selecione um ou vários arquivos TXT (qualquer nome, sem precisar de data)...",
+            placeholder_text="Selecione um ou vários arquivos (TXT, DOC, DOCX, XML, BAT, SQL)...",
             font=ctk.CTkFont(size=13),
             corner_radius=8,
         )
@@ -446,31 +446,35 @@ class ImportView(ctk.CTkFrame):
         self.selected_files.clear()
         mode = self.import_mode.get()
         if mode == "folder":
-            self.entry_path.configure(placeholder_text="Selecione a pasta do computador com os arquivos TXT...")
+            self.entry_path.configure(placeholder_text="Selecione a pasta do computador com os arquivos suportados...")
             self.lbl_folder_tip.configure(
-                text="💡 Dica: Todos os arquivos .txt da pasta selecionada serão importados como notas (sem exigir formato de data). "
+                text="💡 Dica: Todos os arquivos suportados (.txt, .doc, .docx, .xml, .bat, .sql) da pasta selecionada serão importados como notas. "
                      "Ao clicar em Iniciar, você poderá confirmar em qual pasta do sistema deseja colocá-las ou criar uma nova pasta."
             )
         else:
             self.entry_path.configure(
-                placeholder_text="Selecione um ou vários arquivos TXT (qualquer nome, sem precisar de data)..."
+                placeholder_text="Selecione um ou vários arquivos (TXT, DOC, DOCX, XML, BAT, SQL)..."
             )
             self.lbl_folder_tip.configure(
-                text="💡 Dica: Selecione um ou vários arquivos .txt (com qualquer nome). O nome do arquivo será usado como título da nota "
+                text="💡 Dica: Selecione um ou vários arquivos (.txt, .doc, .docx, .xml, .bat, .sql). O nome do arquivo será usado como título da nota "
                      "e o sistema perguntará em qual pasta deseja salvar ou se deseja criar uma nova pasta."
             )
 
     def _browse_path(self):
         mode = self.import_mode.get()
         if mode == "folder":
-            folder = filedialog.askdirectory(parent=self, title="Selecione a pasta com os arquivos TXT")
+            folder = filedialog.askdirectory(parent=self, title="Selecione a pasta com os arquivos para importar")
             if folder:
                 self.selected_files.clear()
                 self.entry_path.delete(0, "end")
                 self.entry_path.insert(0, folder)
         else:
             supported_types = [
-                ("Formatos Suportados (*.txt;*.xml;*.bat;*.sql)", "*.txt;*.xml;*.bat;*.sql;*.TXT;*.XML;*.BAT;*.SQL"),
+                (
+                    "Formatos Suportados (*.txt;*.doc;*.docx;*.xml;*.bat;*.sql)",
+                    "*.txt;*.doc;*.docx;*.xml;*.bat;*.sql;*.TXT;*.DOC;*.DOCX;*.XML;*.BAT;*.SQL",
+                ),
+                ("Documentos do Word (*.doc;*.docx)", "*.doc;*.docx;*.DOC;*.DOCX"),
                 ("Arquivos de Texto (*.txt)", "*.txt;*.TXT"),
                 ("Arquivos XML (*.xml)", "*.xml;*.XML"),
                 ("Arquivos Batch / BAT (*.bat)", "*.bat;*.BAT"),
@@ -479,7 +483,7 @@ class ImportView(ctk.CTkFrame):
             ]
             file_paths = filedialog.askopenfilenames(
                 parent=self,
-                title="Selecione os arquivos para importar como Notas (TXT, XML, BAT, SQL - Ctrl+A para selecionar todos)",
+                title="Selecione os arquivos para importar como Notas (TXT, DOC, DOCX, XML, BAT, SQL - Ctrl+A para selecionar todos)",
                 filetypes=supported_types,
             )
             if file_paths:
@@ -533,17 +537,19 @@ class ImportView(ctk.CTkFrame):
                 return
             txt_in_dir = [
                 f for f in os.listdir(path)
-                if f.lower().endswith(".txt") and os.path.isfile(os.path.join(path, f))
+                if not f.startswith("~$")
+                and f.lower().endswith(SUPPORTED_NOTE_EXTENSIONS)
+                and os.path.isfile(os.path.join(path, f))
             ]
             if not txt_in_dir:
                 show_message(
                     self,
                     "Aviso",
-                    "Não foram encontrados arquivos .txt na pasta selecionada.",
+                    "Não foram encontrados arquivos suportados (.txt, .doc, .docx, .xml, .bat, .sql) na pasta selecionada.",
                     kind="warning",
                 )
                 return
-            files_desc = f"📁 {len(txt_in_dir)} arquivo(s) TXT encontrados na pasta '{os.path.basename(path)}'."
+            files_desc = f"📁 {len(txt_in_dir)} arquivo(s) encontrados na pasta '{os.path.basename(path)}'."
 
         # Pergunta ao usuário em qual pasta deseja colocar a(s) nota(s) ou se precisa criar uma nova pasta
         preselected_folder_id = self._get_preselected_folder_id()

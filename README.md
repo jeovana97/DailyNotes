@@ -1,6 +1,6 @@
 # Diário de Anotações Inteligente (DailyNotes) 📓
 
-**Versão atual:** `1.7.0`
+**Versão atual:** `1.8.0`
 
 O **Diário de Anotações Inteligente (DailyNotes)** é um sistema desktop completo para Windows, desenvolvido em **Python** e **CustomTkinter**, projetado para centralizar, organizar e consultar tanto **anotações diárias por data** quanto **notas técnicas/permanentes organizadas em pastas e subpastas**.
 
@@ -19,26 +19,28 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
   - **🔠 MAIÚSCULO** e **🔡 minúsculo:** Selecione qualquer trecho no texto (ou no título da nota) e converta instantaneamente para letras maiúsculas ou minúsculas.
   - **</> XML (Cor)** e **🗄️ SQL (Cor):** Formata (indenta tags XML ou padroniza cláusulas/comandos SQL) e aplica **destaque de sintaxe colorido** (tags, atributos, valores, comandos `SELECT`, `FROM`, `WHERE`, `JOIN`, funções, strings e comentários).
 - **Colagem Inteligente:** Ao colar qualquer texto (`Ctrl+V` ou menu do botão direito **📄 Colar**), o cursor é posicionado automaticamente no final do texto e a tela rola para exibir a última informação colada.
-- **Corretor Ortográfico Nativo do Windows (pt-BR):**
+- **Corretor Ortográfico Nativo do Windows (pt-BR) e Atalhos Rápidos (`Ctrl+Space` e `F5`):**
   - Sublinha em vermelho palavras não reconhecidas em tempo real.
   - Ao clicar com o **botão direito** sobre uma palavra sublinhada, exibe sugestões de correção imediatas do Windows, opção de **➕ Adicionar ao Dicionário** ou **👁️ Ignorar**.
+  - **`Ctrl + Space`:** Completa a sugestão do corretor ou corrige automaticamente palavras com erro ortográfico sob o cursor ou ao final do texto (compatível com `Ctrl+Z`).
+  - **`F5`:** Insere automaticamente a data e hora atual (`DD/MM/AAAA HH:MM`) na posição do cursor.
 
 ### 2. 🗂️ Notas & Pastas (Notas sem Vínculo com Datas)
 - **Organização Livre por Assunto:** Ideal para guardar scripts SQL, senhas, leiautes XML, procedimentos, links úteis e anotações de referência permanente.
 - **Pastas e Subpastas Ilimitadas:** Crie pastas principais e subpastas aninhadas, renomeie ou exclua pastas facilmente.
-- **Formatação Rica, Cores XML/SQL e Conversão de Caixa:** Barra de ferramentas integrada com seletores de **Fonte** e **Tamanho**, botões **Negrito (`B`)**, **Itálico (`I`)**, **Sublinhado (`U`)**, **Riscado (`S`)**, **🔠 MAIÚSCULO**, **🔡 minúsculo**, **</> XML (Cor)**, **🗄️ SQL (Cor)** e **🎨 Limpar Cor**, com histórico unificado de **Desfazer (`Ctrl+Z`) / Refazer (`Ctrl+Y`)** e detecção automática de cores ao abrir notas com XML ou SQL.
-- **Importação Direta para Pastas:** Botão **📥 Importar TXT** para importar arquivos `.txt` com qualquer nome (sem precisar de formato de data), perguntando em qual pasta deseja colocar a nota ou permitindo criar uma nova pasta na hora.
+- **Formatação Rica, Cores XML/SQL, Conversão de Caixa e Atalhos:** Barra de ferramentas integrada com seletores de **Fonte** e **Tamanho**, botões **Negrito (`B`)**, **Itálico (`I`)**, **Sublinhado (`U`)**, **Riscado (`S`)**, **🔠 MAIÚSCULO**, **🔡 minúsculo**, **</> XML (Cor)**, **🗄️ SQL (Cor)** e **🎨 Limpar Cor**, atalhos **`F5`** (data/hora) e **`Ctrl+Space`** (corretor/autocompletar), histórico unificado de **Desfazer (`Ctrl+Z`) / Refazer (`Ctrl+Y`)** e detecção automática de cores ao abrir notas com XML ou SQL.
+- **Importação Direta para Pastas:** Botão **📥 Importar** para importar arquivos `.txt`, `.doc`, `.docx`, `.sql`, `.xml` e `.bat` com qualquer nome (sem precisar de formato de data), perguntando em qual pasta deseja colocar a nota ou permitindo criar uma nova pasta na hora.
 - **Mover Nota de Pasta:** Mova qualquer nota entre pastas pelo seletor no topo do editor, pelo botão **📂 Mover** ou pelo menu de opções (`⋯` / clique direito na nota).
 - **Pesquisa Exclusiva por Nome da Nota:** Possui barra de busca própria no topo da árvore lateral que filtra instantaneamente pelo título da nota (mantendo essas notas isoladas da Pesquisa Avançada do Diário).
 
-### 3. ⏰ Agendamentos e Lembretes com Notificação do Windows
-- **Cadastro de Notas Agendadas:** Cadastre tarefas, compromissos e lembretes definindo **Assunto**, **Nota/Detalhes**, **Data (DD/MM/AAAA)**, **Horário (HH:MM)**, **Nível de Prioridade** (Baixa, Normal, Alta, Urgente) e **Repetição** (Não repete, Diariamente, Semanalmente, Mensalmente).
-- **Notificação Nativa do Windows (Toast):** Quando o horário agendado é atingido, o DailyNotes emite automaticamente uma notificação nativa na Central de Ações do Windows com aviso sonoro e prévia da nota.
-- **Painel com Filtros Inteligentes:** Alterne facilmente entre abas: **Pendentes**, **Hoje**, **Atrasados**, **Notificados**, **Concluídos** e **Todos**, com barra de busca em tempo real por assunto ou conteúdo.
-- **Ações Rápidas:** Botões para **✔️ Concluir** (ou **↩️ Reabrir**), **✏️ Editar**, **📝 Abrir no Diário** da data e **🔔 Testar Aviso** para verificar as notificações do Windows imediatamente.
+### 3. ✅ Agendamentos & Tarefas (Gerenciador Estilo Microsoft To Do)
+- **Cadastro Completo de Tarefas:** Cadastre atividades com **Título**, **Descrição inicial**, **Data de início**, **Data prevista**, **Horário (opcional)**, **Prioridade** (Baixa, Média, Alta, Urgente), **Status** (Pendente, Em andamento, Concluída, Cancelada), **Categoria** e **Lembretes**.
+- **Histórico Cronológico de Andamento:** Registre atualizações e observações ao longo da execução dentro de cada tarefa, preservando todos os registros anteriores com data, horário e status no momento. Ao concluir, registra automaticamente a data/hora de conclusão e permite reabrir mantendo todo o histórico.
+- **Painel de Produtividade e Visão Split-View:** Indicadores clicáveis (*Pendentes*, *Em andamento*, *Concluídas*, *Atrasadas*, *Para hoje*), **8 abas de visualização**, destaque das tarefas do dia, pesquisa por título/descrição/andamento, filtros por período/status/prioridade, ordenação por 4 critérios, alteração rápida de status na listagem e painel lateral de detalhes completo.
+- **Notificações Nativas do Windows (Toast) Vinculadas às Tarefas:** Suporte a lembrete em data/horário específicos (com repetição), aviso no dia do vencimento, aviso antecipado e lembrete diário de tarefa atrasada (sem repetições indevidas), com botões de ação direta para abrir a tarefa ou adiar o aviso.
 
-### 4. 🔍 Pesquisa Avançada (Diário, Pastas e Arquivos)
-- **Busca Instantânea Unificada:** Localiza qualquer palavra ou expressão no **Diário**, em **Pastas e Arquivos** ou em ambos simultaneamente, ignorando diferenças entre maiúsculas/minúsculas e acentuação (ex: buscar `sessao` encontra `sessão`).
+### 4. 🔍 Pesquisa Avançada de Alta Performance (Diário, Pastas e Arquivos)
+- **Busca Instantânea Unificada com SQLite FTS5 Trigram:** Localiza rapidamente qualquer palavra, trecho ou substring no **Diário**, em **Pastas e Arquivos** ou em ambos simultaneamente com paginação progressiva, ignorando diferenças entre maiúsculas/minúsculas e acentuação (ex: buscar `sessao` encontra `sessão`).
 - **Identificação de Origem e Navegação `F3`:** Cada resultado exibe claramente se pertence ao **📔 Diário** ou a **📁 Pasta & Arquivos** (com caminho da pasta e título). Ao abrir o documento, todas as palavras-chave ficam destacadas e é possível navegar entre as ocorrências usando **`F3`** (próxima) e **`Shift+F3`** (anterior).
 - **Filtros Combinados:** Filtre por **Escopo**, **Data Inicial**, **Data Final**, **Data Exata**, **Ordenação** (mais recentes ou mais antigas) e **Usuário** (para administradores com permissão).
 - **Janela de Visualização (Somente Leitura) com Opção de Edição:**
@@ -51,8 +53,8 @@ Substitui dezenas de arquivos `.txt` soltos por uma base de dados **SQLite** rá
 - **Navegação Direta por Data:** Clique no cabeçalho do mês/ano no calendário para digitar qualquer data (`DD/MM/AAAA`, `MM/AAAA` ou ano) e ir diretamente ao período desejado.
 - **Leitura Protegida:** Clicar em **📖 Abrir** em qualquer dia listado abre a janela dedicada em modo **🔒 Somente Leitura**, contando com o botão **✏️ Editar Nota** caso queira editar sem perder a navegação do calendário.
 
-### 6. 📥 Importar TXT (Direto para Pastas)
-- **Sem Necessidade de Formato de Data:** Importa um ou vários arquivos `.txt` (ou uma pasta inteira do computador) com **qualquer nome de arquivo**, usando o nome do arquivo como título da nota e detectando automaticamente a codificação (`UTF-8`, `ANSI/Windows-1252`, `ISO-8859-1`).
+### 6. 📥 Importar Arquivos (`.txt`, `.doc`, `.docx`, `.sql`, `.xml`, `.bat`)
+- **Suporte Multi-formato sem Exigir Data no Nome:** Importa um ou vários arquivos (ou uma pasta inteira do computador) nos formatos **`.txt`**, **`.doc`**, **`.docx`** (OOXML, OLE2, RTF, Word XML, HTML/MHTML), **`.sql`**, **`.xml`** e **`.bat`**, usando o nome do arquivo como título da nota e detectando automaticamente formato e codificação (`UTF-8`, `ANSI/Windows-1252`, `ISO-8859-1`).
 - **Escolha ou Criação de Pasta na Hora:** Ao iniciar a importação, o sistema pergunta em qual pasta deseja colocar a(s) nota(s) ou permite **criar uma nova pasta/subpasta** imediatamente na mesma janela.
 - **Tratamento de Conflitos:** Escolha entre **Ignorar**, **Substituir** ou **Mesclar (Anexar)** caso já exista uma nota com o mesmo nome na pasta escolhida.
 - **Histórico do Último TXT Importado:** Exibe no topo da tela um card destacando o **📄 Último TXT Importado** (nome do arquivo, pasta de destino e data/hora da importação), com botão rápido **🗂️ Abrir em Notas & Pastas**.

@@ -109,6 +109,94 @@ class TestDiarySpellCheckIntegration(unittest.TestCase):
         self.assertTrue(self.view.spellcheck_enabled.get())
         self.assertGreater(len(self.view.txt_content._textbox.tag_ranges("spelling_error")), 0)
 
+    def test_f5_inserts_current_datetime_and_supports_undo(self):
+        import re
+        from utils.syntax_highlighter import perform_undo, reset_undo_stack
+
+        self.view.txt_content.delete("1.0", "end")
+        self.view.txt_content.insert("1.0", "Registro: ")
+        self.view.txt_content._textbox.mark_set("insert", "end-1c")
+        reset_undo_stack(self.view.txt_content)
+
+        # Aciona F5
+        self.view.editor_assist._on_f5()
+        text_after = self.view.txt_content.get("1.0", "end-1c")
+        self.assertRegex(text_after, r"^Registro: \d{2}/\d{2}/\d{4} \d{2}:\d{2}$")
+
+        # Ctrl+Z desfaz a inserção de data/hora
+        self.assertTrue(perform_undo(self.view.txt_content))
+        self.assertEqual(self.view.txt_content.get("1.0", "end-1c"), "Registro: ")
+
+    def test_ctrl_space_corrects_end_of_text_and_completes_suggestions(self):
+        if not self.spell_service.is_available:
+            self.skipTest("Windows Spell Checking API não disponível.")
+
+        from utils.syntax_highlighter import perform_undo, reset_undo_stack
+        from utils.rich_text import TAG_BOLD
+
+        tb = self.view.txt_content._textbox
+
+        # 1. Erro ortográfico colado no cursor no fim do texto (preservando negrito)
+        self.view.txt_content.delete("1.0", "end")
+        self.view.txt_content.insert("1.0", "Hoje fui ao mercadu")
+        tb.tag_add("sel", "1.12", "1.19")
+        self.view.rich_text.toggle_bold()
+        tb.tag_remove("sel", "1.0", "end")
+        tb.mark_set("insert", "end-1c")
+        reset_undo_stack(self.view.txt_content)
+
+        res1 = self.view.editor_assist.trigger_smart_complete_or_correct()
+        self.assertIsNotNone(res1)
+        self.assertEqual(self.view.txt_content.get("1.0", "end-1c"), "Hoje fui ao mercado")
+        self.assertIn(TAG_BOLD, tb.tag_names("1.13"))
+
+        # Ctrl+Z desfaz a correção do Ctrl+Space
+        self.assertTrue(perform_undo(self.view.txt_content))
+        self.assertEqual(self.view.txt_content.get("1.0", "end-1c"), "Hoje fui ao mercadu")
+
+        # 2. Erro ortográfico no fim do texto seguido de ponto final e espaço
+        self.view.txt_content.delete("1.0", "end")
+        self.view.txt_content.insert("1.0", "Favor revisar o relatorio. ")
+        tb.mark_set("insert", "end-1c")
+        reset_undo_stack(self.view.txt_content)
+
+        res2 = self.view.editor_assist.trigger_smart_complete_or_correct()
+        self.assertIsNotNone(res2)
+        self.assertEqual(self.view.txt_content.get("1.0", "end-1c"), "Favor revisar o relatório. ")
+
+        # 3. Completar palavra sugerida pelo corretor e ciclar sugestões com segundo Ctrl+Space
+        self.view.txt_content.delete("1.0", "end")
+        self.view.txt_content.insert("1.0", "Muito obrigad")
+        tb.mark_set("insert", "end-1c")
+        reset_undo_stack(self.view.txt_content)
+
+        res3 = self.view.editor_assist.trigger_smart_complete_or_correct()
+        self.assertIsNotNone(res3)
+        first_applied = self.view.txt_content.get("1.0", "end-1c")
+        self.assertIn(first_applied, ("Muito obrigado", "Muito obrigada"))
+
+        # Segundo Ctrl+Space consecutivo alterna para a próxima sugestão
+        res3_next = self.view.editor_assist.trigger_smart_complete_or_correct()
+        self.assertIsNotNone(res3_next)
+        second_applied = self.view.txt_content.get("1.0", "end-1c")
+        self.assertNotEqual(second_applied, first_applied)
+
+        # 4. Completar frase já escrita anteriormente na nota
+        self.view.txt_content.delete("1.0", "end")
+        self.view.txt_content.insert(
+            "1.0",
+            "Relatório de Emissão de Nota Fiscal\nRelatório de Em",
+        )
+        tb.mark_set("insert", "end-1c")
+        reset_undo_stack(self.view.txt_content)
+
+        res4 = self.view.editor_assist.trigger_smart_complete_or_correct()
+        self.assertIsNotNone(res4)
+        self.assertEqual(
+            self.view.txt_content.get("1.0", "end-1c"),
+            "Relatório de Emissão de Nota Fiscal\nRelatório de Emissão de Nota Fiscal",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

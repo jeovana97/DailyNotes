@@ -1,3 +1,4 @@
+import time
 import tkinter as tk
 from tkinter import filedialog
 from typing import Optional, Callable, List, Dict, Any
@@ -9,7 +10,7 @@ from services.diary_service import DiaryService
 from services.search_service import SearchService
 from services.authentication_service import AuthenticationService
 from services.backup_service import BackupService
-from utils.date_utils import format_date_br, format_date_long_br, parse_date_input
+from utils.date_utils import format_date_br, parse_date_input
 from views.components.dialogs import show_message, DiaryNoteReaderDialog
 
 
@@ -18,7 +19,12 @@ class SearchView(ctk.CTkFrame):
     Tela exclusiva de Pesquisa Avançada.
     Permite encontrar rapidamente qualquer anotação por palavra/expressão,
     sem distinção de maiúsculas ou acentuação, combinando filtros por data e usuário.
+    Otimizada com paginação incremental e renderização progressiva em lotes leves.
     """
+
+    PAGE_SIZE = 25
+    INITIAL_SYNC_BATCH = 8
+    ASYNC_BATCH_SIZE = 6
 
     def __init__(
         self,
@@ -43,8 +49,37 @@ class SearchView(ctk.CTkFrame):
         self.results: List[Dict[str, Any]] = []
         self.selected_index: int = -1
         self._reader_dialog: Optional[DiaryNoteReaderDialog] = None
+        self._last_elapsed_ms: float = 0.0
+
+        # Controle de renderização progressiva e paginação incremental
+        self._render_token: int = 0
+        self._render_job_id: Optional[str] = None
+        self._rendered_count: int = 0
+        self._target_render_count: int = 0
+        self._load_more_frame: Optional[tk.Widget] = None
 
         self._build_ui()
+
+    @staticmethod
+    def _resolve_color(color_val, is_dark: bool) -> str:
+        if isinstance(color_val, (tuple, list)):
+            return color_val[1 if is_dark else 0]
+        return str(color_val)
+
+    def _get_theme_palette(self) -> Dict[str, str]:
+        is_dark = ctk.get_appearance_mode() == "Dark"
+        return {
+            "card_bg": self._resolve_color(config.COLORS["card_dark_alt"], is_dark),
+            "border": self._resolve_color(config.COLORS["border_dark"], is_dark),
+            "text": self._resolve_color(config.COLORS["text_dark"], is_dark),
+            "muted": self._resolve_color(config.COLORS["text_muted"], is_dark),
+            "primary": self._resolve_color(config.COLORS["primary"], is_dark),
+            "primary_hover": self._resolve_color(config.COLORS["primary_hover"], is_dark),
+            "secondary": self._resolve_color(config.COLORS["secondary"], is_dark),
+            "secondary_hover": self._resolve_color(config.COLORS["secondary_hover"], is_dark),
+            "btn_bg": self._resolve_color(config.COLORS["card_dark"], is_dark),
+            "btn_fg": self._resolve_color(config.COLORS["button_text"], is_dark),
+        }
 
     def _build_ui(self):
         # 1. Painel Superior com Filtros de Pesquisa
@@ -274,9 +309,27 @@ class SearchView(ctk.CTkFrame):
             "Utilize a barra de pesquisa acima para encontrar informações no Diário ou em Pastas e Arquivos."
         )
 
-    def _render_empty_state(self, message: str):
+    def _cancel_pending_render(self):
+        self._render_token += 1
+        if self._render_job_id is not None:
+            try:
+                self.after_cancel(self._render_job_id)
+            except Exception:
+                pass
+            self._render_job_id = None
+
+    def _clear_results_container(self):
+        self._cancel_pending_render()
+        self._load_more_frame = None
         for widget in self.results_scroll.winfo_children():
             widget.destroy()
+        try:
+            self.results_scroll._parent_canvas.yview_moveto(0.0)
+        except Exception:
+            pass
+
+    def _render_empty_state(self, message: str):
+        self._clear_results_container()
 
         empty_box = ctk.CTkFrame(self.results_scroll, fg_color="transparent")
         empty_box.pack(expand=True, fill="both", pady=60)
@@ -341,7 +394,8 @@ class SearchView(ctk.CTkFrame):
         else:
             scope = "all"
 
-        # Executa a busca conforme o escopo selecionado
+        # Executa a busca otimizada (FTS5 trigram + C nativo) medindo o tempo real
+        t0 = time.perf_counter()
         self.results = self.search_service.search_all(
             requester=self.current_user,
             query=query,
@@ -352,13 +406,135 @@ class SearchView(ctk.CTkFrame):
             order_desc=order_desc,
             scope=scope,
         )
+        self._last_elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
         self.selected_index = -1
         self._render_results()
 
-    def _render_results(self):
-        for widget in self.results_scroll.winfo_children():
-            widget.destroy()
+    def _update_summary_label(self):
+        total = len(self.results)
+        ms_txt = f"{self._last_elapsed_ms:.0f} ms" if self._last_elapsed_ms >= 1.0 else "< 1 ms"
+        noun = "anotação encontrada" if total == 1 else "anotações encontradas"
+        if self._rendered_count < total:
+            shown = min(self._target_render_count, total)
+            summary = f"✅ {total} {noun} (exibindo {shown} de {total} • {ms_txt})"
+        else:
+            summary = f"✅ {total} {noun} ({ms_txt})"
+        self.lbl_results_count.configure(text=summary, text_color=config.COLORS["success"])
+
+    def _create_result_card(self, item: Dict[str, Any], palette: Dict[str, str]):
+        """Cria um card leve (Tk nativo estilizado com o tema) de altíssima velocidade."""
+        is_note = (item.get("source_type") == "note")
+        card_bg = palette["card_bg"]
+
+        card = tk.Frame(
+            self.results_scroll,
+            bg=card_bg,
+            highlightbackground=palette["border"],
+            highlightthickness=1,
+            bd=0,
+        )
+        card.pack(fill="x", padx=10, pady=4)
+
+        # Cabeçalho compacto: Badge + Título/Data + Usuário + Data alteração + Botão Abrir
+        header_row = tk.Frame(card, bg=card_bg)
+        header_row.pack(fill="x", padx=12, pady=(8, 3))
+
+        badge_bg = palette["secondary"] if is_note else palette["primary"]
+        origin_badge = tk.Label(
+            header_row,
+            text="📁 Pasta & Arquivos" if is_note else "📔 Diário",
+            bg=badge_bg,
+            fg="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+            padx=7,
+            pady=2,
+        )
+        origin_badge.pack(side="left", padx=(0, 8))
+
+        if is_note:
+            folder_path = item.get("folder_path", "Raiz (Sem pasta)")
+            note_title = item.get("title", "Sem título")
+            title_txt = f"📄 {note_title}   •   📂 {folder_path}"
+        else:
+            date_str = format_date_br(item["entry_date"])
+            title_txt = f"📅 {date_str}"
+
+        lbl_date = tk.Label(
+            header_row,
+            text=title_txt,
+            bg=card_bg,
+            fg=palette["text"],
+            font=("Segoe UI", 10, "bold"),
+            anchor="w",
+        )
+        lbl_date.pack(side="left")
+
+        if self.current_user.can_view_other_diaries:
+            lbl_user = tk.Label(
+                header_row,
+                text=f"👤 {item.get('full_name')} (@{item.get('username')})",
+                bg=card_bg,
+                fg=palette["secondary"],
+                font=("Segoe UI", 9),
+            )
+            lbl_user.pack(side="left", padx=12)
+
+        btn_bg = palette["secondary"] if is_note else palette["primary"]
+        btn_hover = palette["secondary_hover"] if is_note else palette["primary_hover"]
+        btn_text = "📂 Abrir na Pasta" if is_note else "📖 Abrir Anotação (Leitura)"
+
+        btn_open = tk.Button(
+            header_row,
+            text=btn_text,
+            bg=btn_bg,
+            fg="#FFFFFF",
+            activebackground=btn_hover,
+            activeforeground="#FFFFFF",
+            relief="flat",
+            bd=0,
+            padx=10,
+            pady=3,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+            command=lambda it=item: self._open_item(it),
+        )
+        btn_open.pack(side="right", padx=(8, 0))
+        btn_open.bind("<Enter>", lambda _e, b=btn_open, c=btn_hover: b.configure(bg=c))
+        btn_open.bind("<Leave>", lambda _e, b=btn_open, c=btn_bg: b.configure(bg=c))
+
+        lbl_updated = tk.Label(
+            header_row,
+            text=f"Alterado: {item.get('updated_at', '')}",
+            bg=card_bg,
+            fg=palette["muted"],
+            font=("Segoe UI", 8),
+        )
+        lbl_updated.pack(side="right")
+
+        # Trecho com o termo localizado
+        snippet_text = item.get("snippet", "")
+        lbl_snippet = tk.Label(
+            card,
+            text=snippet_text,
+            bg=card_bg,
+            fg=palette["text"],
+            font=("Segoe UI", 10),
+            wraplength=760,
+            justify="left",
+            anchor="w",
+        )
+        lbl_snippet.pack(fill="x", padx=14, pady=(2, 8))
+
+        # Duplo clique no card ou no trecho abre o item correspondente
+        open_handler = lambda _e, it=item: self._open_item(it)
+        card.bind("<Double-Button-1>", open_handler)
+        header_row.bind("<Double-Button-1>", open_handler)
+        lbl_date.bind("<Double-Button-1>", open_handler)
+        lbl_snippet.bind("<Double-Button-1>", open_handler)
+
+    def _render_results(self, initial_limit: Optional[int] = None):
+        self._clear_results_container()
 
         count = len(self.results)
         if count == 0:
@@ -369,128 +545,141 @@ class SearchView(ctk.CTkFrame):
             self.btn_export_csv.configure(state="disabled")
             self.btn_prev_res.configure(state="disabled")
             self.btn_next_res.configure(state="disabled")
-            self._render_empty_state("Nenhuma anotação corresponde aos critérios de pesquisa.\nTente utilizar palavras mais curtas ou verificar o período filtrado.")
+            self._render_empty_state(
+                "Nenhuma anotação corresponde aos critérios de pesquisa.\n"
+                "Tente utilizar palavras mais curtas ou verificar o período filtrado."
+            )
             return
 
-        self.lbl_results_count.configure(
-            text=f"✅ {count} {'anotação encontrada' if count == 1 else 'anotações encontradas'}:",
-            text_color=config.COLORS["success"],
-        )
         self.btn_export_csv.configure(state="normal")
         self.btn_prev_res.configure(state="normal")
         self.btn_next_res.configure(state="normal")
 
-        # Renderiza cada resultado em um card moderno
-        for idx, item in enumerate(self.results):
-            is_note = (item.get("source_type") == "note")
+        self._rendered_count = 0
+        self._target_render_count = min(count, initial_limit or self.PAGE_SIZE)
+        token = self._render_token
+        palette = self._get_theme_palette()
 
-            card = ctk.CTkFrame(
-                self.results_scroll,
-                corner_radius=10,
-                fg_color=config.COLORS["card_dark_alt"],
-                border_width=1,
-                border_color=config.COLORS["border_dark"],
+        # Renderiza o primeiro lote imediatamente (preenche toda a área visível sem espera)
+        first_end = min(self._target_render_count, self.INITIAL_SYNC_BATCH)
+        for idx in range(0, first_end):
+            self._create_result_card(self.results[idx], palette)
+        self._rendered_count = first_end
+        self._update_summary_label()
+
+        if self._rendered_count < self._target_render_count:
+            self._render_job_id = self.after(
+                8, lambda t=token, p=palette: self._render_next_batch(t, p)
             )
-            card.pack(fill="x", padx=10, pady=5)
+        else:
+            self._ensure_load_more_footer(palette)
 
-            # Cabeçalho do Card (Badge de Origem, Data/Título, Usuário, Data de alteração)
-            header_row = ctk.CTkFrame(card, fg_color="transparent")
-            header_row.pack(fill="x", padx=12, pady=(10, 4))
+    def _render_next_batch(self, token: int, palette: Dict[str, str]):
+        self._render_job_id = None
+        if token != self._render_token:
+            return
+        try:
+            if not self.winfo_exists() or not self.results_scroll.winfo_exists():
+                return
+        except Exception:
+            return
 
-            origin_badge = ctk.CTkLabel(
-                header_row,
-                text="📁 Pasta & Arquivos" if is_note else "📔 Diário",
-                font=ctk.CTkFont(size=11, weight="bold"),
-                fg_color=config.COLORS["secondary"] if is_note else config.COLORS["primary"],
-                text_color="#FFFFFF",
-                corner_radius=6,
-                padx=8,
-                pady=2,
+        batch_end = min(self._target_render_count, self._rendered_count + self.ASYNC_BATCH_SIZE)
+        for idx in range(self._rendered_count, batch_end):
+            self._create_result_card(self.results[idx], palette)
+        self._rendered_count = batch_end
+        self._update_summary_label()
+
+        if self._rendered_count < self._target_render_count:
+            self._render_job_id = self.after(
+                8, lambda t=token, p=palette: self._render_next_batch(t, p)
             )
-            origin_badge.pack(side="left", padx=(0, 10))
+        else:
+            self._ensure_load_more_footer(palette)
 
-            if is_note:
-                folder_path = item.get("folder_path", "Raiz (Sem pasta)")
-                note_title = item.get("title", "Sem título")
-                lbl_date = ctk.CTkLabel(
-                    header_row,
-                    text=f"📄 {note_title}   •   📂 {folder_path}",
-                    font=ctk.CTkFont(size=13, weight="bold"),
-                    text_color=config.COLORS["text_dark"],
-                )
-            else:
-                date_str = format_date_br(item["entry_date"])
-                lbl_date = ctk.CTkLabel(
-                    header_row,
-                    text=f"📅 {date_str}",
-                    font=ctk.CTkFont(size=14, weight="bold"),
-                    text_color=config.COLORS["text_dark"],
-                )
-            lbl_date.pack(side="left")
+    def _ensure_load_more_footer(self, palette: Dict[str, str]):
+        if self._load_more_frame is not None:
+            try:
+                self._load_more_frame.destroy()
+            except Exception:
+                pass
+            self._load_more_frame = None
 
-            if self.current_user.can_view_other_diaries:
-                lbl_user = ctk.CTkLabel(
-                    header_row,
-                    text=f"👤 {item.get('full_name')} (@{item.get('username')})",
-                    font=ctk.CTkFont(size=12),
-                    text_color=config.COLORS["secondary"],
-                )
-                lbl_user.pack(side="left", padx=15)
+        remaining = len(self.results) - self._rendered_count
+        if remaining <= 0:
+            return
 
-            lbl_updated = ctk.CTkLabel(
-                header_row,
-                text=f"Última alteração: {item.get('updated_at', '')}",
-                font=ctk.CTkFont(size=11),
-                text_color=config.COLORS["text_muted"],
-            )
-            lbl_updated.pack(side="right")
+        next_step = min(self.PAGE_SIZE, remaining)
+        footer = tk.Frame(self.results_scroll, bg=palette["btn_bg"])
+        footer.pack(fill="x", padx=10, pady=(8, 12))
 
-            # Trecho com o termo localizado
-            snippet_text = item.get("snippet", "")
-            lbl_snippet = ctk.CTkLabel(
-                card,
-                text=snippet_text,
-                font=ctk.CTkFont(size=13),
-                text_color=config.COLORS["text_dark"],
-                wraplength=700,
-                justify="left",
-                anchor="w",
-            )
-            lbl_snippet.pack(fill="x", padx=14, pady=(2, 8))
+        btn_more = tk.Button(
+            footer,
+            text=f"➕ Carregar mais +{next_step} resultados (restam {remaining})",
+            bg=palette["primary"],
+            fg="#FFFFFF",
+            activebackground=palette["primary_hover"],
+            activeforeground="#FFFFFF",
+            relief="flat",
+            bd=0,
+            padx=16,
+            pady=6,
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
+            command=self._load_more_results,
+        )
+        btn_more.pack(side="left", padx=(0, 8))
 
-            # Rodapé do Card com botão abrir
-            footer_row = ctk.CTkFrame(card, fg_color="transparent")
-            footer_row.pack(fill="x", padx=12, pady=(0, 10))
+        btn_all = tk.Button(
+            footer,
+            text=f"📋 Mostrar todos ({len(self.results)})",
+            bg=palette["card_bg"],
+            fg=palette["text"],
+            activebackground=palette["border"],
+            activeforeground=palette["text"],
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=6,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+            command=self._load_all_results,
+        )
+        btn_all.pack(side="left")
 
-            if is_note:
-                btn_open = ctk.CTkButton(
-                    footer_row,
-                    text="📂 Abrir na Pasta",
-                    width=165,
-                    height=28,
-                    corner_radius=6,
-                    fg_color=config.COLORS["secondary"],
-                    hover_color=config.COLORS["secondary_hover"],
-                    text_color="#FFFFFF",
-                    command=lambda it=item: self._open_item(it),
-                )
-            else:
-                btn_open = ctk.CTkButton(
-                    footer_row,
-                    text="📖 Abrir Anotação (Leitura)",
-                    width=185,
-                    height=28,
-                    corner_radius=6,
-                    fg_color=config.COLORS["primary"],
-                    hover_color=config.COLORS["primary_hover"],
-                    text_color="#FFFFFF",
-                    command=lambda it=item: self._open_item(it),
-                )
-            btn_open.pack(side="right")
+        self._load_more_frame = footer
 
-            # Duplo clique no card ou no trecho abre o item correspondente
-            card.bind("<Double-Button-1>", lambda e, it=item: self._open_item(it))
-            lbl_snippet.bind("<Double-Button-1>", lambda e, it=item: self._open_item(it))
+    def _load_more_results(self):
+        if self._load_more_frame is not None:
+            try:
+                self._load_more_frame.destroy()
+            except Exception:
+                pass
+            self._load_more_frame = None
+
+        self._target_render_count = min(len(self.results), self._rendered_count + self.PAGE_SIZE)
+        token = self._render_token
+        palette = self._get_theme_palette()
+        self._render_next_batch(token, palette)
+
+    def _load_all_results(self):
+        if self._load_more_frame is not None:
+            try:
+                self._load_more_frame.destroy()
+            except Exception:
+                pass
+            self._load_more_frame = None
+
+        self._target_render_count = len(self.results)
+        token = self._render_token
+        palette = self._get_theme_palette()
+        self._render_next_batch(token, palette)
+
+    def refresh_theme(self):
+        """Reaplica a paleta Claro/Escuro nos cards leves já renderizados."""
+        if self.results:
+            keep_count = max(self.PAGE_SIZE, self._rendered_count)
+            self._render_results(initial_limit=keep_count)
 
     def _open_item(self, item: Dict[str, Any]):
         """Abre um resultado do Diário ou de Pastas & Arquivos conforme sua origem."""
@@ -589,3 +778,7 @@ class SearchView(ctk.CTkFrame):
                 show_message(self, "Exportado", msg, kind="success")
             else:
                 show_message(self, "Erro", msg, kind="danger")
+
+    def destroy(self):
+        self._cancel_pending_render()
+        super().destroy()

@@ -1,886 +1,1521 @@
 """
-Tela de Gerenciamento de Agendamentos e Lembretes.
-Permite cadastrar notas agendadas com data, horário, prioridade e repetição,
-com disparo automático de notificações nativas do Windows.
+Tela principal do Gerenciador de Tarefas e Agendamentos (evolução do menu Agendamentos).
+Experiência estilo Microsoft To Do integrada ao Diário de Anotações:
+- Indicadores de produtividade (Pendentes, Em andamento, Concluídas, Atrasadas, Para hoje)
+- 8 abas/visões rápidas + pesquisa em título/descrição/histórico + filtros + ordenação
+- Listagem moderna com alteração rápida de status e destaque visual para tarefas do dia/atrasadas
+- Painel lateral completo de Detalhes da Tarefa (Informações gerais, Ações e Andamento/Histórico cronológico).
 """
 
 import datetime
-import tkinter as tk
-from typing import Optional, Callable, List
+from typing import Callable, Dict, List, Optional
 import customtkinter as ctk
 
 import config
 from models.user import User
-from models.schedule import Schedule
+from models.task import (
+    PRIORITY_LABELS,
+    STATUS_LABELS,
+    Task,
+    normalize_status,
+)
 from services.schedule_service import ScheduleService
-from utils.date_utils import format_date_br, parse_date_input, get_today_iso
-from views.components.dialogs import show_message, ask_confirmation
+from services.task_service import TaskService
+from utils.date_utils import parse_date_input
 from utils.notification_utils import send_windows_notification
-from utils.window_utils import center_modal_on_parent
+from views.components.dialogs import ask_confirmation, show_message
+from views.components.task_dialogs import TaskFormDialog
 
 
-class ScheduleModalDialog(ctk.CTkToplevel):
-    """Modal para cadastro ou edição de agendamento/lembrete."""
+PRIORITY_COLORS = {
+    "baixa": ("#64748B", "#94A3B8"),
+    "media": ("#2563EB", "#3B82F6"),
+    "alta": ("#EA580C", "#F97316"),
+    "urgente": ("#DC2626", "#EF4444"),
+}
 
-    def __init__(
-        self,
-        parent,
-        title: str,
-        schedule: Optional[Schedule] = None,
-        initial_date: Optional[str] = None,
-    ):
-        super().__init__(parent)
-        self.title(title)
+PRIORITY_ICONS = {
+    "baixa": "⚪",
+    "media": "🔵",
+    "alta": "🟠",
+    "urgente": "🔴",
+}
 
-        win_w = 520
-        win_h = 600
-        self.geometry(f"{win_w}x{win_h}")
-        self.minsize(460, 500)
-        self.resizable(True, True)
-        self.transient(parent)
-        self.grab_set()
+STATUS_COLORS = {
+    "pendente": ("#2563EB", "#3B82F6"),
+    "em_andamento": ("#7C3AED", "#8B5CF6"),
+    "concluida": ("#059669", "#10B981"),
+    "cancelada": ("#64748B", "#64748B"),
+}
 
-        self.schedule = schedule
-        self.result = None
+STATUS_ICONS = {
+    "pendente": "⏳",
+    "em_andamento": "🚀",
+    "concluida": "✅",
+    "cancelada": "🚫",
+}
 
-        center_modal_on_parent(self, parent, win_w, win_h)
+TAB_DEFINITIONS = [
+    ("todas", "Todas"),
+    ("pendentes", "Pendentes"),
+    ("em_andamento", "Em andamento"),
+    ("concluidas", "Concluídas"),
+    ("canceladas", "Canceladas"),
+    ("atrasadas", "Atrasadas"),
+    ("hoje", "☀️ Para hoje"),
+    ("proximos_dias", "Próximos dias"),
+]
 
-        # 1. Barra inferior FIXA de botões (GARANTE visibilidade sempre)
-        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.btn_frame.pack(side="bottom", fill="x", padx=20, pady=(8, 14))
-
-        btn_save_text = "💾 Salvar Agendamento" if not schedule else "💾 Atualizar Agendamento"
-        self.btn_save = ctk.CTkButton(
-            self.btn_frame,
-            text=btn_save_text,
-            width=190,
-            height=38,
-            corner_radius=8,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=config.COLORS["success"],
-            hover_color=config.COLORS["success_hover"],
-            text_color="#FFFFFF",
-            command=self._on_save,
-        )
-        self.btn_save.pack(side="left")
-
-        self.btn_cancel = ctk.CTkButton(
-            self.btn_frame,
-            text="Cancelar",
-            width=100,
-            height=38,
-            corner_radius=8,
-            font=ctk.CTkFont(size=13),
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self.destroy,
-        )
-        self.btn_cancel.pack(side="right")
-
-        # 2. Container com rolagem para os campos do formulário
-        self.container = ctk.CTkScrollableFrame(
-            self,
-            corner_radius=12,
-            fg_color=config.COLORS["card_dark"],
-            border_width=1,
-            border_color=config.COLORS["border_dark"],
-        )
-        self.container.pack(side="top", fill="both", expand=True, padx=15, pady=(15, 6))
-
-        header_title = "⏰ Novo Agendamento de Nota" if not schedule else f"✏️ Editar Agendamento #{schedule.id}"
-        self.lbl_title = ctk.CTkLabel(
-            self.container,
-            text=header_title,
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        self.lbl_title.pack(pady=(12, 10))
-
-        # Campo: Assunto / Título
-        self.lbl_subject = ctk.CTkLabel(
-            self.container,
-            text="Assunto / Título da Nota:",
-            anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        self.lbl_subject.pack(fill="x", padx=20, pady=(0, 2))
-
-        self.entry_title = ctk.CTkEntry(
-            self.container,
-            height=36,
-            placeholder_text="Ex: Reunião com diretoria, Entrega de relatório, Pagamento...",
-            corner_radius=6,
-            font=ctk.CTkFont(size=13),
-        )
-        self.entry_title.pack(fill="x", padx=20, pady=(0, 12))
-        if schedule:
-            self.entry_title.insert(0, schedule.title)
-
-        # Linha dupla: Data e Horário
-        dt_frame = ctk.CTkFrame(self.container, fg_color="transparent")
-        dt_frame.pack(fill="x", padx=20, pady=(0, 12))
-
-        # Coluna Esquerda: Data
-        col_date = ctk.CTkFrame(dt_frame, fg_color="transparent")
-        col_date.pack(side="left", fill="x", expand=True, padx=(0, 10))
-
-        lbl_date = ctk.CTkLabel(
-            col_date,
-            text="📅 Data (DD/MM/AAAA):",
-            anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        lbl_date.pack(fill="x", pady=(0, 2))
-
-        date_input_row = ctk.CTkFrame(col_date, fg_color="transparent")
-        date_input_row.pack(fill="x")
-
-        self.entry_date = ctk.CTkEntry(
-            date_input_row,
-            height=36,
-            placeholder_text="DD/MM/AAAA",
-            corner_radius=6,
-            font=ctk.CTkFont(size=13),
-        )
-        self.entry_date.pack(side="left", fill="x", expand=True, padx=(0, 4))
-
-        btn_today = ctk.CTkButton(
-            date_input_row,
-            text="Hoje",
-            width=50,
-            height=36,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11),
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self._set_date_today,
-        )
-        btn_today.pack(side="left", padx=(0, 4))
-
-        btn_tomorrow = ctk.CTkButton(
-            date_input_row,
-            text="+1 Dia",
-            width=54,
-            height=36,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11),
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self._set_date_tomorrow,
-        )
-        btn_tomorrow.pack(side="left")
-
-        # Coluna Direita: Horário
-        col_time = ctk.CTkFrame(dt_frame, fg_color="transparent")
-        col_time.pack(side="right", fill="x", expand=True, padx=(10, 0))
-
-        lbl_time = ctk.CTkLabel(
-            col_time,
-            text="🕒 Horário (HH:MM):",
-            anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        lbl_time.pack(fill="x", pady=(0, 2))
-
-        time_input_row = ctk.CTkFrame(col_time, fg_color="transparent")
-        time_input_row.pack(fill="x")
-
-        self.entry_time = ctk.CTkEntry(
-            time_input_row,
-            height=36,
-            placeholder_text="09:00",
-            corner_radius=6,
-            font=ctk.CTkFont(size=13),
-        )
-        self.entry_time.pack(side="left", fill="x", expand=True, padx=(0, 4))
-
-        btn_plus_1h = ctk.CTkButton(
-            time_input_row,
-            text="+1h",
-            width=46,
-            height=36,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11),
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["border_dark"],
-            text_color=config.COLORS["button_text"],
-            command=self._add_hour_to_time,
-        )
-        btn_plus_1h.pack(side="left")
-
-        # Inicializa valores de data e hora
-        if schedule:
-            self.entry_date.insert(0, schedule.date_br)
-            self.entry_time.insert(0, schedule.schedule_time)
-        else:
-            default_d = format_date_br(initial_date) if initial_date else datetime.date.today().strftime("%d/%m/%Y")
-            self.entry_date.insert(0, default_d)
-            # Horário padrão: próxima hora cheia
-            now = datetime.datetime.now()
-            default_time = (now + datetime.timedelta(hours=1)).strftime("%H:00")
-            self.entry_time.insert(0, default_time)
-
-        # Linha de Opções: Prioridade e Repetição
-        opts_frame = ctk.CTkFrame(self.container, fg_color="transparent")
-        opts_frame.pack(fill="x", padx=20, pady=(0, 12))
-
-        # Prioridade
-        col_prio = ctk.CTkFrame(opts_frame, fg_color="transparent")
-        col_prio.pack(side="left", fill="x", expand=True, padx=(0, 10))
-
-        lbl_prio = ctk.CTkLabel(
-            col_prio,
-            text="Prioridade:",
-            anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        lbl_prio.pack(fill="x", pady=(0, 2))
-
-        self.combo_priority = ctk.CTkComboBox(
-            col_prio,
-            values=["Normal", "Alta", "Urgente", "Baixa"],
-            height=36,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12),
-        )
-        self.combo_priority.pack(fill="x")
-        if schedule and schedule.priority:
-            prio_map = {"normal": "Normal", "alta": "Alta", "urgente": "Urgente", "baixa": "Baixa"}
-            self.combo_priority.set(prio_map.get(schedule.priority.lower(), "Normal"))
-        else:
-            self.combo_priority.set("Normal")
-
-        # Repetição
-        col_rep = ctk.CTkFrame(opts_frame, fg_color="transparent")
-        col_rep.pack(side="right", fill="x", expand=True, padx=(10, 0))
-
-        lbl_rep = ctk.CTkLabel(
-            col_rep,
-            text="Repetição do Lembrete:",
-            anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        lbl_rep.pack(fill="x", pady=(0, 2))
-
-        self.combo_repeat = ctk.CTkComboBox(
-            col_rep,
-            values=["Não repete", "Diariamente", "Semanalmente", "Mensalmente"],
-            height=36,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12),
-        )
-        self.combo_repeat.pack(fill="x")
-        if schedule and schedule.repeat_interval:
-            rep_map = {"none": "Não repete", "daily": "Diariamente", "weekly": "Semanalmente", "monthly": "Mensalmente"}
-            self.combo_repeat.set(rep_map.get(schedule.repeat_interval.lower(), "Não repete"))
-        else:
-            self.combo_repeat.set("Não repete")
-
-        # Campo: Conteúdo da Nota / Detalhes
-        self.lbl_content = ctk.CTkLabel(
-            self.container,
-            text="Nota / Detalhes do Agendamento:",
-            anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        self.lbl_content.pack(fill="x", padx=20, pady=(0, 2))
-
-        self.txt_content = ctk.CTkTextbox(
-            self.container,
-            height=140,
-            corner_radius=8,
-            font=ctk.CTkFont(size=13),
-            wrap="word",
-        )
-        self.txt_content.pack(fill="both", expand=True, padx=20, pady=(0, 15))
-        if schedule and schedule.content:
-            self.txt_content.insert("1.0", schedule.content)
-
-        # Informações sobre a notificação
-        self.lbl_info = ctk.CTkLabel(
-            self.container,
-            text="🔔 Quando a data e horário agendados forem atingidos, o DailyNotes emitirá automaticamente um aviso nativo no Windows (Central de Ações) com sinal sonoro.",
-            font=ctk.CTkFont(size=11),
-            text_color=config.COLORS["text_muted"],
-            wraplength=440,
-            justify="left",
-        )
-        self.lbl_info.pack(fill="x", padx=20, pady=(0, 10))
-
-        self.entry_title.focus_set()
-        self.wait_window(self)
-
-    def _set_date_today(self):
-        self.entry_date.delete(0, "end")
-        self.entry_date.insert(0, datetime.date.today().strftime("%d/%m/%Y"))
-
-    def _set_date_tomorrow(self):
-        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-        self.entry_date.delete(0, "end")
-        self.entry_date.insert(0, tomorrow.strftime("%d/%m/%Y"))
-
-    def _add_hour_to_time(self):
-        current_time_str = self.entry_time.get().strip()
-        try:
-            parts = current_time_str.split(":")
-            hh = int(parts[0])
-            mm = int(parts[1]) if len(parts) > 1 else 0
-            new_hh = (hh + 1) % 24
-            self.entry_time.delete(0, "end")
-            self.entry_time.insert(0, f"{new_hh:02d}:{mm:02d}")
-        except Exception:
-            self.entry_time.delete(0, "end")
-            self.entry_time.insert(0, "10:00")
-
-    def _on_save(self):
-        title = self.entry_title.get().strip()
-        if not title:
-            show_message(self, "Aviso", "Informe o assunto ou título do agendamento.", kind="warning")
-            self.entry_title.focus_set()
-            return
-
-        date_str = self.entry_date.get().strip()
-        date_iso = parse_date_input(date_str)
-        if not date_iso:
-            show_message(self, "Aviso", "Informe uma data válida no formato DD/MM/AAAA.", kind="warning")
-            self.entry_date.focus_set()
-            return
-
-        time_str = self.entry_time.get().strip()
-        try:
-            parts = time_str.split(":")
-            hh = int(parts[0])
-            mm = int(parts[1]) if len(parts) > 1 else 0
-            if hh < 0 or hh > 23 or mm < 0 or mm > 59:
-                raise ValueError()
-            time_formatted = f"{hh:02d}:{mm:02d}"
-        except Exception:
-            show_message(self, "Aviso", "Informe um horário válido no formato HH:MM (ex: 14:30).", kind="warning")
-            self.entry_time.focus_set()
-            return
-
-        prio_choice = self.combo_priority.get().lower()
-        priority = "normal"
-        if "urgente" in prio_choice:
-            priority = "urgente"
-        elif "alta" in prio_choice:
-            priority = "alta"
-        elif "baixa" in prio_choice:
-            priority = "baixa"
-
-        rep_choice = self.combo_repeat.get().lower()
-        repeat = "none"
-        if "diar" in rep_choice:
-            repeat = "daily"
-        elif "seman" in rep_choice:
-            repeat = "weekly"
-        elif "mens" in rep_choice:
-            repeat = "monthly"
-
-        content = self.txt_content.get("1.0", "end-1c").strip()
-
-        self.result = {
-            "title": title,
-            "content": content,
-            "schedule_date": date_iso,
-            "schedule_time": time_formatted,
-            "priority": priority,
-            "repeat_interval": repeat,
-        }
-        self.destroy()
+SORT_OPTIONS = {
+    "Data prevista": "due_date",
+    "Prioridade": "priority",
+    "Data de cadastro": "created_at",
+    "Última atualização": "updated_at",
+}
 
 
 class SchedulesView(ctk.CTkFrame):
     """
-    Tela principal de Agendamentos e Lembretes.
+    Tela do Gerenciador de Tarefas e Agendamentos.
+    Mantém o nome `SchedulesView` e assinatura compatível com `MainWindow`.
     """
 
     def __init__(
         self,
         master,
         current_user: User,
-        schedule_service: ScheduleService,
-        on_open_diary_date: Optional[Callable[[str], None]] = None,
+        schedule_service: Optional[ScheduleService] = None,
+        on_open_diary_date: Optional[Callable[[str, int], None]] = None,
+        task_service: Optional[TaskService] = None,
     ):
         super().__init__(master, fg_color="transparent")
         self.current_user = current_user
         self.schedule_service = schedule_service
         self.on_open_diary_date = on_open_diary_date
 
-        self.current_filter = "pendente"
+        db_path = (
+            task_service.db_path
+            if task_service is not None
+            else (schedule_service.db_path if schedule_service is not None else config.DB_PATH)
+        )
+        self.task_service = task_service or TaskService(db_path=db_path)
+
+        # Estado de filtros, ordenação e seleção
+        self.current_tab: str = "todas"
+        self.current_sort_by: str = "due_date"
+        self.current_sort_desc: bool = False
+        self.selected_task_id: Optional[int] = None
+        self.history_descending: bool = False
+        self._tasks_cache: List[Task] = []
+        self._card_frames: Dict[int, ctk.CTkFrame] = {}
+        self._tab_buttons: Dict[str, ctk.CTkButton] = {}
+        self._summary_labels: Dict[str, ctk.CTkLabel] = {}
+        self._search_after_id: Optional[str] = None
+        self._updating_detail_controls: bool = False
+
+        self._status_label_to_key = {v: k for k, v in STATUS_LABELS.items()}
+        self._prio_label_to_key = {v: k for k, v in PRIORITY_LABELS.items()}
+
         self._build_ui()
         self.refresh()
 
+    def destroy(self):
+        if self._search_after_id is not None:
+            try:
+                self.after_cancel(self._search_after_id)
+            except Exception:
+                pass
+            self._search_after_id = None
+        super().destroy()
+
+    # ==========================================================================
+    # CONSTRUÇÃO DA INTERFACE
+    # ==========================================================================
+
     def _build_ui(self):
-        # 1. Cabeçalho Card
-        self.header_card = ctk.CTkFrame(
-            self,
-            corner_radius=12,
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0)  # Cabeçalho
+        self.grid_rowconfigure(1, weight=0)  # Cards de indicadores
+        self.grid_rowconfigure(2, weight=0)  # Abas + pesquisa/filtros
+        self.grid_rowconfigure(3, weight=1)  # Split-view (Lista | Detalhes)
+
+        # --- ROW 0: CABEÇALHO ---
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 8))
+
+        title_col = ctk.CTkFrame(header, fg_color="transparent")
+        title_col.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(
+            title_col,
+            text="✅ Agendamentos & Tarefas",
+            font=ctk.CTkFont(size=21, weight="bold"),
+            text_color=config.COLORS["text_dark"],
+            anchor="w",
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            title_col,
+            text="Organize suas atividades, acompanhe o andamento passo a passo e receba lembretes no Windows.",
+            font=ctk.CTkFont(size=12),
+            text_color=config.COLORS["text_muted"],
+            anchor="w",
+        ).pack(anchor="w", pady=(1, 0))
+
+        actions_hdr = ctk.CTkFrame(header, fg_color="transparent")
+        actions_hdr.pack(side="right")
+
+        ctk.CTkButton(
+            actions_hdr,
+            text="🔔 Testar Aviso",
+            width=124,
+            height=36,
+            corner_radius=8,
+            font=ctk.CTkFont(size=12, weight="bold"),
             fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["card_dark_alt"],
             border_width=1,
             border_color=config.COLORS["border_dark"],
-        )
-        self.header_card.pack(fill="x", padx=20, pady=(15, 10))
-
-        header_content = ctk.CTkFrame(self.header_card, fg_color="transparent")
-        header_content.pack(fill="x", padx=16, pady=12)
-
-        lbl_header = ctk.CTkLabel(
-            header_content,
-            text="⏰ Agendamentos e Lembretes",
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        lbl_header.pack(side="left")
-
-        # Botão Testar Notificação do Windows
-        self.btn_test_notif = ctk.CTkButton(
-            header_content,
-            text="🔔 Testar Notificação",
-            height=34,
-            corner_radius=8,
-            font=ctk.CTkFont(size=12),
-            fg_color=config.COLORS["card_dark_alt"],
-            hover_color=config.COLORS["primary"],
             text_color=config.COLORS["button_text"],
             command=self._handle_test_notification,
-        )
-        self.btn_test_notif.pack(side="right", padx=(8, 0))
+        ).pack(side="left", padx=(0, 8))
 
-        # Botão Novo Agendamento
-        self.btn_new = ctk.CTkButton(
-            header_content,
-            text="➕ Novo Agendamento",
-            height=34,
+        ctk.CTkButton(
+            actions_hdr,
+            text="➕ Nova Tarefa",
+            width=142,
+            height=36,
             corner_radius=8,
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color=config.COLORS["primary"],
             hover_color=config.COLORS["primary_hover"],
             text_color="#FFFFFF",
-            command=self._handle_new_schedule,
-        )
-        self.btn_new.pack(side="right")
+            command=self._handle_new_task,
+        ).pack(side="left")
 
-        # 2. Barra de Filtros e Pesquisa
-        self.filter_card = ctk.CTkFrame(
+        # --- ROW 1: INDICADORES DE PRODUTIVIDADE ---
+        cards_row = ctk.CTkFrame(self, fg_color="transparent")
+        cards_row.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 8))
+        for i in range(5):
+            cards_row.grid_columnconfigure(i, weight=1, uniform="kpi")
+
+        kpis = [
+            ("pendentes", "📋 Pendentes", ("#2563EB", "#3B82F6")),
+            ("em_andamento", "🚀 Em andamento", ("#7C3AED", "#8B5CF6")),
+            ("concluidas", "✅ Concluídas", ("#059669", "#10B981")),
+            ("atrasadas", "🚨 Atrasadas", ("#DC2626", "#EF4444")),
+            ("hoje", "☀️ Para hoje", ("#D97706", "#F59E0B")),
+        ]
+        for idx, (key, label, accent) in enumerate(kpis):
+            pad_l = 0 if idx == 0 else 4
+            pad_r = 0 if idx == len(kpis) - 1 else 4
+            card = ctk.CTkFrame(
+                cards_row,
+                corner_radius=10,
+                fg_color=config.COLORS["card_dark"],
+                border_width=1,
+                border_color=config.COLORS["border_dark"],
+                cursor="hand2",
+            )
+            card.grid(row=0, column=idx, sticky="ew", padx=(pad_l, pad_r))
+
+            inner = ctk.CTkFrame(card, fg_color="transparent")
+            inner.pack(fill="x", padx=12, pady=8)
+
+            lbl_val = ctk.CTkLabel(
+                inner,
+                text="0",
+                font=ctk.CTkFont(size=20, weight="bold"),
+                text_color=accent,
+                anchor="w",
+            )
+            lbl_val.pack(side="left", padx=(0, 8))
+
+            lbl_name = ctk.CTkLabel(
+                inner,
+                text=label,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=config.COLORS["text_dark"],
+                anchor="w",
+            )
+            lbl_name.pack(side="left", fill="x", expand=True)
+
+            self._summary_labels[key] = lbl_val
+            for w in (card, inner, lbl_val, lbl_name):
+                w.bind("<Button-1>", lambda _e, k=key: self._set_tab(k))
+
+        # --- ROW 2: ABAS + PESQUISA, FILTROS E ORDENAÇÃO ---
+        controls_card = ctk.CTkFrame(
             self,
             corner_radius=10,
             fg_color=config.COLORS["card_dark"],
             border_width=1,
             border_color=config.COLORS["border_dark"],
         )
-        self.filter_card.pack(fill="x", padx=20, pady=(0, 10))
+        controls_card.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
 
-        filter_row = ctk.CTkFrame(self.filter_card, fg_color="transparent")
-        filter_row.pack(fill="x", padx=14, pady=10)
+        # 2.1 Abas de visualização
+        tabs_row = ctk.CTkFrame(controls_card, fg_color="transparent")
+        tabs_row.pack(fill="x", padx=10, pady=(8, 6))
 
-        # Segmented Button de Status
-        self.seg_filter = ctk.CTkSegmentedButton(
-            filter_row,
-            values=["Pendentes", "Hoje", "Atrasados", "Notificados", "Concluídos", "Todos"],
-            command=self._on_segment_changed,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            height=32,
-        )
-        self.seg_filter.set("Pendentes")
-        self.seg_filter.pack(side="left", padx=(0, 14))
+        for tab_key, tab_title in TAB_DEFINITIONS:
+            btn = ctk.CTkButton(
+                tabs_row,
+                text=tab_title,
+                height=30,
+                width=74,
+                corner_radius=7,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color="transparent",
+                hover_color=config.COLORS["card_dark_alt"],
+                text_color=config.COLORS["text_dark"],
+                command=lambda k=tab_key: self._set_tab(k),
+            )
+            btn.pack(side="left", padx=(0, 4))
+            self._tab_buttons[tab_key] = btn
 
-        # Campo de Busca
+        # 2.2 Pesquisa + Filtros + Ordenação
+        filters_row = ctk.CTkFrame(controls_card, fg_color="transparent")
+        filters_row.pack(fill="x", padx=10, pady=(0, 8))
+
         self.entry_search = ctk.CTkEntry(
-            filter_row,
-            placeholder_text="🔍 Buscar por assunto ou nota...",
+            filters_row,
             height=32,
-            corner_radius=6,
-            font=ctk.CTkFont(size=12),
+            placeholder_text="🔍 Pesquisar por título, descrição ou andamento...",
+            corner_radius=7,
         )
-        self.entry_search.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.entry_search.bind("<KeyRelease>", lambda e: self.refresh())
+        self.entry_search.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.entry_search.bind("<KeyRelease>", self._on_search_key_release)
+        self.entry_search.bind("<Return>", lambda _e: self.refresh())
 
-        # Botão Recarregar
-        self.btn_refresh = ctk.CTkButton(
-            filter_row,
-            text="🔄",
-            width=36,
+        self.opt_filter_priority = ctk.CTkOptionMenu(
+            filters_row,
+            values=["Prioridade: Todas"] + list(PRIORITY_LABELS.values()),
+            width=136,
             height=32,
-            corner_radius=6,
-            font=ctk.CTkFont(size=13),
+            corner_radius=7,
+            font=ctk.CTkFont(size=11),
+            command=lambda _v: self.refresh(),
+        )
+        self.opt_filter_priority.set("Prioridade: Todas")
+        self.opt_filter_priority.pack(side="left", padx=(0, 5))
+
+        self.opt_filter_status = ctk.CTkOptionMenu(
+            filters_row,
+            values=["Status: Todos"] + list(STATUS_LABELS.values()),
+            width=128,
+            height=32,
+            corner_radius=7,
+            font=ctk.CTkFont(size=11),
+            command=lambda _v: self.refresh(),
+        )
+        self.opt_filter_status.set("Status: Todos")
+        self.opt_filter_status.pack(side="left", padx=(0, 5))
+
+        self.entry_date_from = ctk.CTkEntry(
+            filters_row,
+            width=96,
+            height=32,
+            placeholder_text="De DD/MM/AA",
+            corner_radius=7,
+            font=ctk.CTkFont(size=11),
+        )
+        self.entry_date_from.pack(side="left", padx=(0, 4))
+        self.entry_date_from.bind("<Return>", lambda _e: self.refresh())
+        self.entry_date_from.bind("<FocusOut>", lambda _e: self.refresh())
+
+        self.entry_date_to = ctk.CTkEntry(
+            filters_row,
+            width=96,
+            height=32,
+            placeholder_text="Até DD/MM/AA",
+            corner_radius=7,
+            font=ctk.CTkFont(size=11),
+        )
+        self.entry_date_to.pack(side="left", padx=(0, 5))
+        self.entry_date_to.bind("<Return>", lambda _e: self.refresh())
+        self.entry_date_to.bind("<FocusOut>", lambda _e: self.refresh())
+
+        self.opt_sort_by = ctk.CTkOptionMenu(
+            filters_row,
+            values=list(SORT_OPTIONS.keys()),
+            width=134,
+            height=32,
+            corner_radius=7,
+            font=ctk.CTkFont(size=11),
+            command=self._on_sort_changed,
+        )
+        self.opt_sort_by.set("Data prevista")
+        self.opt_sort_by.pack(side="left", padx=(0, 4))
+
+        self.btn_sort_dir = ctk.CTkButton(
+            filters_row,
+            text="↑",
+            width=30,
+            height=32,
+            corner_radius=7,
+            font=ctk.CTkFont(size=13, weight="bold"),
             fg_color=config.COLORS["card_dark_alt"],
             hover_color=config.COLORS["primary"],
             text_color=config.COLORS["button_text"],
-            command=self.refresh,
+            command=self._toggle_sort_direction,
         )
-        self.btn_refresh.pack(side="left")
+        self.btn_sort_dir.pack(side="left", padx=(0, 4))
 
-        # Barra de Resumo de Métricas
-        self.summary_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.summary_frame.pack(fill="x", padx=20, pady=(0, 8))
-
-        self.lbl_summary = ctk.CTkLabel(
-            self.summary_frame,
-            text="",
-            font=ctk.CTkFont(size=12, weight="bold"),
+        ctk.CTkButton(
+            filters_row,
+            text="Limpar",
+            width=60,
+            height=32,
+            corner_radius=7,
+            font=ctk.CTkFont(size=11),
+            fg_color=config.COLORS["card_dark_alt"],
+            hover_color=config.COLORS["border_dark"],
             text_color=config.COLORS["text_muted"],
-            anchor="w",
-        )
-        self.lbl_summary.pack(side="left")
+            command=self._clear_filters,
+        ).pack(side="left")
 
-        # 3. Lista Rolável de Agendamentos
-        self.scroll_list = ctk.CTkScrollableFrame(
-            self,
+        # --- ROW 3: SPLIT-VIEW (LISTA À ESQUERDA | DETALHES À DIREITA) ---
+        split = ctk.CTkFrame(self, fg_color="transparent")
+        split.grid(row=3, column=0, sticky="nsew", padx=18, pady=(0, 14))
+        split.grid_rowconfigure(0, weight=1)
+        split.grid_columnconfigure(0, weight=56, minsize=430)
+        split.grid_columnconfigure(1, weight=44, minsize=380)
+
+        # Painel Esquerdo: Lista de Tarefas
+        self.list_panel = ctk.CTkFrame(
+            split,
             corner_radius=12,
             fg_color=config.COLORS["card_dark"],
             border_width=1,
             border_color=config.COLORS["border_dark"],
         )
-        self.scroll_list.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+        self.list_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.list_panel.grid_columnconfigure(0, weight=1)
+        self.list_panel.grid_rowconfigure(0, weight=0)
+        self.list_panel.grid_rowconfigure(1, weight=0)
+        self.list_panel.grid_rowconfigure(2, weight=1)
 
-    def _on_segment_changed(self, value: str):
-        val_map = {
-            "Pendentes": "pendente",
-            "Hoje": "hoje",
-            "Atrasados": "atrasados",
-            "Notificados": "notificado",
-            "Concluídos": "concluido",
-            "Todos": "todos",
-        }
-        self.current_filter = val_map.get(value, "pendente")
+        list_hdr = ctk.CTkFrame(self.list_panel, fg_color="transparent")
+        list_hdr.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
+
+        self.lbl_list_title = ctk.CTkLabel(
+            list_hdr,
+            text="📋 Todas as Tarefas",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=config.COLORS["text_dark"],
+            anchor="w",
+        )
+        self.lbl_list_title.pack(side="left")
+
+        self.lbl_list_count = ctk.CTkLabel(
+            list_hdr,
+            text="0 tarefas",
+            font=ctk.CTkFont(size=11),
+            text_color=config.COLORS["text_muted"],
+        )
+        self.lbl_list_count.pack(side="right")
+
+        # Banner de destaque "Tarefas do Dia" (exibido dinamicamente)
+        self.today_banner = ctk.CTkFrame(
+            self.list_panel,
+            corner_radius=8,
+            fg_color=("#FEF3C7", "#2B2111"),
+            border_width=1,
+            border_color=("#F59E0B", "#92400E"),
+        )
+        self.lbl_today_banner = ctk.CTkLabel(
+            self.today_banner,
+            text="",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=("#92400E", "#FCD34D"),
+            anchor="w",
+        )
+        self.lbl_today_banner.pack(side="left", padx=10, pady=6, fill="x", expand=True)
+
+        self.btn_today_focus = ctk.CTkButton(
+            self.today_banner,
+            text="Ver hoje",
+            width=74,
+            height=24,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=("#D97706", "#B45309"),
+            hover_color=("#B45309", "#D97706"),
+            text_color="#FFFFFF",
+            command=lambda: self._set_tab("hoje"),
+        )
+        self.btn_today_focus.pack(side="right", padx=8, pady=5)
+
+        self.list_scroll = ctk.CTkScrollableFrame(
+            self.list_panel,
+            fg_color="transparent",
+            corner_radius=0,
+        )
+        self.list_scroll.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 10))
+
+        # Painel Direito: Detalhes da Tarefa
+        self.detail_panel = ctk.CTkFrame(
+            split,
+            corner_radius=12,
+            fg_color=config.COLORS["card_dark"],
+            border_width=1,
+            border_color=config.COLORS["border_dark"],
+        )
+        self.detail_panel.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        self.detail_panel.grid_columnconfigure(0, weight=1)
+        self.detail_panel.grid_rowconfigure(0, weight=1)
+
+        self.detail_scroll = ctk.CTkScrollableFrame(
+            self.detail_panel,
+            fg_color="transparent",
+            corner_radius=0,
+        )
+        self.detail_scroll.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+    # ==========================================================================
+    # FILTROS, ABAS E ORDENAÇÃO
+    # ==========================================================================
+
+    def _set_tab(self, tab_key: str):
+        self.current_tab = tab_key
         self.refresh()
 
+    def _on_search_key_release(self, _event=None):
+        if self._search_after_id is not None:
+            try:
+                self.after_cancel(self._search_after_id)
+            except Exception:
+                pass
+        self._search_after_id = self.after(180, self.refresh)
+
+    def _on_sort_changed(self, selected_label: str):
+        self.current_sort_by = SORT_OPTIONS.get(selected_label, "due_date")
+        if self.current_sort_by in ("created_at", "updated_at"):
+            self.current_sort_desc = True
+        else:
+            self.current_sort_desc = False
+        self.btn_sort_dir.configure(text="↓" if self.current_sort_desc else "↑")
+        self.refresh()
+
+    def _toggle_sort_direction(self):
+        self.current_sort_desc = not self.current_sort_desc
+        self.btn_sort_dir.configure(text="↓" if self.current_sort_desc else "↑")
+        self.refresh()
+
+    def _clear_filters(self):
+        self.current_tab = "todas"
+        self.entry_search.delete(0, "end")
+        self.opt_filter_priority.set("Prioridade: Todas")
+        self.opt_filter_status.set("Status: Todos")
+        self.entry_date_from.delete(0, "end")
+        self.entry_date_to.delete(0, "end")
+        self.opt_sort_by.set("Data prevista")
+        self.current_sort_by = "due_date"
+        self.current_sort_desc = False
+        self.btn_sort_dir.configure(text="↑")
+        self.refresh()
+
+    def _update_tab_styles(self, counts: Dict[str, int]):
+        count_map = {
+            "todas": counts["total"],
+            "pendentes": counts["pendentes"],
+            "em_andamento": counts["em_andamento"],
+            "concluidas": counts["concluidas"],
+            "canceladas": counts["canceladas"],
+            "atrasadas": counts["atrasadas"],
+            "hoje": counts["hoje"],
+            "proximos_dias": counts["proximos_dias"],
+        }
+        for key, base_title in TAB_DEFINITIONS:
+            btn = self._tab_buttons.get(key)
+            if not btn:
+                continue
+            cnt = count_map.get(key, 0)
+            btn.configure(text=f"{base_title} ({cnt})")
+            if key == self.current_tab:
+                btn.configure(
+                    fg_color=config.COLORS["primary"],
+                    hover_color=config.COLORS["primary_hover"],
+                    text_color="#FFFFFF",
+                )
+            else:
+                btn.configure(
+                    fg_color="transparent",
+                    hover_color=config.COLORS["card_dark_alt"],
+                    text_color=config.COLORS["text_dark"],
+                )
+
+    def _get_active_filters(self) -> Dict[str, str]:
+        prio_val = self.opt_filter_priority.get()
+        prio_filter = "" if prio_val.startswith("Prioridade:") else self._prio_label_to_key.get(prio_val, "")
+
+        status_val = self.opt_filter_status.get()
+        status_filter = "" if status_val.startswith("Status:") else self._status_label_to_key.get(status_val, "")
+
+        raw_from = self.entry_date_from.get().strip()
+        date_from = parse_date_input(raw_from) if raw_from else ""
+        if date_from is None:
+            date_from = ""
+
+        raw_to = self.entry_date_to.get().strip()
+        date_to = parse_date_input(raw_to) if raw_to else ""
+        if date_to is None:
+            date_to = ""
+
+        return {
+            "search_query": self.entry_search.get().strip(),
+            "priority_filter": prio_filter,
+            "status_filter": status_filter,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
+
+    # ==========================================================================
+    # ATUALIZAÇÃO DA TELA E RENDERIZAÇÃO DA LISTAGEM
+    # ==========================================================================
+
     def refresh(self):
-        """Recarrega a listagem de agendamentos e atualiza os badges."""
-        query = self.entry_search.get().strip() if hasattr(self, "entry_search") else None
-        schedules = self.schedule_service.list_schedules(
+        """Recarrega indicadores, listagem filtrada e painel de detalhes."""
+        if not self.winfo_exists():
+            return
+
+        counts = self.task_service.get_summary_counts(self.current_user.id)
+        for key, lbl in self._summary_labels.items():
+            lbl.configure(text=str(counts.get(key, 0)))
+
+        self._update_tab_styles(counts)
+
+        # Banner de destaque "Para hoje"
+        today_count = counts.get("hoje", 0)
+        if today_count > 0 and self.current_tab != "hoje":
+            plural = "tarefa prevista" if today_count == 1 else "tarefas previstas"
+            self.lbl_today_banner.configure(
+                text=f"☀️ Foco do Dia: você tem {today_count} {plural} para hoje!"
+            )
+            self.today_banner.grid(row=1, column=0, sticky="ew", padx=12, pady=(2, 4))
+        else:
+            self.today_banner.grid_forget()
+
+        # Título contextual da listagem
+        tab_title_map = {
+            "todas": "📋 Todas as Tarefas",
+            "pendentes": "⏳ Minhas Tarefas Pendentes",
+            "em_andamento": "🚀 Tarefas em Andamento",
+            "concluidas": "✅ Tarefas Concluídas",
+            "canceladas": "🚫 Tarefas Canceladas",
+            "atrasadas": "🚨 Tarefas Atrasadas",
+            "hoje": "☀️ Foco de Hoje — Tarefas do Dia",
+            "proximos_dias": "🗓️ Próximos Dias",
+        }
+        self.lbl_list_title.configure(text=tab_title_map.get(self.current_tab, "📋 Tarefas"))
+
+        flt = self._get_active_filters()
+        tasks = self.task_service.list_tasks(
             user_id=self.current_user.id,
-            filter_status=self.current_filter,
-            search_query=query,
+            tab=self.current_tab,
+            search_query=flt["search_query"],
+            status_filter=flt["status_filter"] or None,
+            priority_filter=flt["priority_filter"] or None,
+            date_from=flt["date_from"],
+            date_to=flt["date_to"],
+            sort_by=self.current_sort_by,
+            sort_desc=self.current_sort_desc,
         )
-        counts = self.schedule_service.get_summary_counts(self.current_user.id)
-
-        # Atualiza métricas
-        self.lbl_summary.configure(
-            text=f"Total: {counts['total']}  |  🟡 Pendentes: {counts['pendentes']}  |  📅 Hoje: {counts['hoje']}  |  🔴 Atrasados: {counts['atrasados']}  |  🟢 Concluídos: {counts['concluidos']}"
+        self._tasks_cache = tasks
+        self.lbl_list_count.configure(
+            text=f"{len(tasks)} {'tarefa' if len(tasks) == 1 else 'tarefas'}"
         )
 
-        for widget in self.scroll_list.winfo_children():
-            widget.destroy()
+        # Renderiza lista de cards
+        for child in self.list_scroll.winfo_children():
+            child.destroy()
+        self._card_frames.clear()
 
-        if not schedules:
-            empty_frame = ctk.CTkFrame(self.scroll_list, fg_color="transparent")
-            empty_frame.pack(fill="both", expand=True, pady=60)
+        if not tasks:
+            self._render_empty_list_state()
+        else:
+            for task in tasks:
+                self._render_task_card(task)
 
-            lbl_empty_icon = ctk.CTkLabel(
-                empty_frame,
-                text="⏰",
-                font=ctk.CTkFont(size=48),
+        # Mantém tarefa selecionada se ainda existir no banco; senão seleciona a 1ª da lista
+        selected_task = None
+        if self.selected_task_id is not None:
+            selected_task = self.task_service.get_task_by_id(
+                self.selected_task_id, self.current_user.id, include_details=True
             )
-            lbl_empty_icon.pack(pady=(0, 10))
+        if selected_task is None and tasks:
+            self.selected_task_id = tasks[0].id
+            selected_task = self.task_service.get_task_by_id(
+                self.selected_task_id, self.current_user.id, include_details=True
+            )
+        elif selected_task is None:
+            self.selected_task_id = None
 
-            lbl_empty_text = ctk.CTkLabel(
-                empty_frame,
-                text="Nenhum agendamento encontrado nesta categoria.",
-                font=ctk.CTkFont(size=14, weight="bold"),
+        self._highlight_selected_card()
+        self._render_task_details(selected_task)
+
+    def _render_empty_list_state(self):
+        box = ctk.CTkFrame(
+            self.list_scroll,
+            corner_radius=10,
+            fg_color=config.COLORS["card_dark_alt"],
+        )
+        box.pack(fill="x", padx=6, pady=24)
+
+        ctk.CTkLabel(
+            box,
+            text="✨ Nenhuma tarefa encontrada nesta visualização",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=config.COLORS["text_dark"],
+        ).pack(pady=(22, 4))
+
+        ctk.CTkLabel(
+            box,
+            text="Crie uma nova tarefa ou ajuste os filtros/abas acima.",
+            font=ctk.CTkFont(size=12),
+            text_color=config.COLORS["text_muted"],
+        ).pack(pady=(0, 14))
+
+        ctk.CTkButton(
+            box,
+            text="➕ Cadastrar Nova Tarefa",
+            height=34,
+            corner_radius=8,
+            fg_color=config.COLORS["primary"],
+            hover_color=config.COLORS["primary_hover"],
+            text_color="#FFFFFF",
+            command=self._handle_new_task,
+        ).pack(pady=(0, 20))
+
+    def _get_task_accent_color(self, task: Task):
+        if task.is_overdue():
+            return ("#DC2626", "#EF4444")
+        if task.status == "concluida":
+            return ("#059669", "#10B981")
+        if task.status == "cancelada":
+            return ("#64748B", "#64748B")
+        if task.priority == "urgente":
+            return ("#DC2626", "#EF4444")
+        if task.status == "em_andamento":
+            return ("#7C3AED", "#8B5CF6")
+        if task.is_due_today():
+            return ("#D97706", "#F59E0B")
+        return PRIORITY_COLORS.get(task.priority, ("#2563EB", "#3B82F6"))
+
+    def _render_task_card(self, task: Task):
+        accent = self._get_task_accent_color(task)
+        is_selected = task.id == self.selected_task_id
+        overdue = task.is_overdue()
+        due_today = task.is_due_today()
+
+        card = ctk.CTkFrame(
+            self.list_scroll,
+            corner_radius=10,
+            fg_color=config.COLORS["card_dark_alt"],
+            border_width=2 if is_selected else 1,
+            border_color=config.COLORS["primary"] if is_selected else config.COLORS["border_dark"],
+            cursor="hand2",
+        )
+        card.pack(fill="x", padx=4, pady=4)
+        self._card_frames[task.id] = card
+
+        # Faixa lateral colorida de indicador visual
+        bar = ctk.CTkFrame(card, width=5, corner_radius=3, fg_color=accent)
+        bar.pack(side="left", fill="y", padx=(6, 8), pady=8)
+
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(side="left", fill="both", expand=True, padx=(0, 10), pady=8)
+
+        # --- Linha 1: Botão rápido concluir + Título + Seletor rápido de Status ---
+        top_row = ctk.CTkFrame(body, fg_color="transparent")
+        top_row.pack(fill="x")
+
+        toggle_icon = "✓" if task.is_completed else "○"
+        toggle_fg = ("#059669", "#10B981") if task.is_completed else "transparent"
+        toggle_txt = "#FFFFFF" if task.is_completed else config.COLORS["text_muted"]
+        btn_check = ctk.CTkButton(
+            top_row,
+            text=toggle_icon,
+            width=26,
+            height=26,
+            corner_radius=13,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=toggle_fg,
+            hover_color=("#059669", "#10B981"),
+            border_width=1,
+            border_color=("#059669", "#10B981") if task.is_completed else config.COLORS["border_dark"],
+            text_color=toggle_txt,
+            command=lambda t=task: self._handle_quick_toggle_complete(t),
+        )
+        btn_check.pack(side="left", padx=(0, 8))
+
+        title_font = ctk.CTkFont(
+            size=13,
+            weight="bold",
+            overstrike=task.is_completed or task.is_canceled,
+        )
+        title_color = (
+            config.COLORS["text_muted"]
+            if (task.is_completed or task.is_canceled)
+            else config.COLORS["text_dark"]
+        )
+        lbl_title = ctk.CTkLabel(
+            top_row,
+            text=task.title,
+            font=title_font,
+            text_color=title_color,
+            anchor="w",
+        )
+        lbl_title.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        # Seletor rápido de Status diretamente na listagem
+        opt_card_status = ctk.CTkOptionMenu(
+            top_row,
+            values=list(STATUS_LABELS.values()),
+            width=118,
+            height=26,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=STATUS_COLORS.get(task.status, ("#2563EB", "#3B82F6")),
+            button_color=STATUS_COLORS.get(task.status, ("#2563EB", "#3B82F6")),
+            button_hover_color=config.COLORS["primary_hover"],
+            text_color="#FFFFFF",
+            command=lambda val, tid=task.id: self._handle_inline_status_change(tid, val),
+        )
+        opt_card_status.set(task.status_label)
+        opt_card_status.pack(side="right")
+
+        # --- Linha 2: Badges (Prioridade, Atrasada, Hoje, Categoria, Lembrete) ---
+        badges_row = ctk.CTkFrame(body, fg_color="transparent")
+        badges_row.pack(fill="x", pady=(5, 3))
+
+        self._make_pill(
+            badges_row,
+            f"{PRIORITY_ICONS.get(task.priority, '🔵')} {task.priority_label}",
+            PRIORITY_COLORS.get(task.priority, ("#2563EB", "#3B82F6")),
+        )
+
+        if overdue:
+            self._make_pill(badges_row, "⚠️ Atrasada", ("#DC2626", "#EF4444"))
+        elif due_today:
+            self._make_pill(badges_row, "☀️ Hoje", ("#D97706", "#F59E0B"))
+
+        if task.category:
+            self._make_pill(badges_row, f"🏷️ {task.category}", ("#475569", "#475569"))
+
+        if task.reminder_enabled and task.active_reminders_count > 0:
+            self._make_pill(badges_row, "🔔 Lembrete", ("#0284C7", "#0EA5E9"))
+
+        if task.history_count > 0:
+            self._make_pill(
+                badges_row,
+                f"💬 {task.history_count}",
+                ("#64748B", "#475569"),
+            )
+
+        # --- Linha 3: Data Prevista + Última Atualização ---
+        meta_row = ctk.CTkFrame(body, fg_color="transparent")
+        meta_row.pack(fill="x", pady=(2, 0))
+
+        due_color = ("#DC2626", "#F87171") if overdue else config.COLORS["text_muted"]
+        lbl_due = ctk.CTkLabel(
+            meta_row,
+            text=f"📅 Previsto: {task.due_display}",
+            font=ctk.CTkFont(size=11, weight="bold" if (overdue or due_today) else "normal"),
+            text_color=due_color,
+            anchor="w",
+        )
+        lbl_due.pack(side="left", padx=(0, 12))
+
+        last_note = (task.last_update_note or "").replace("\n", " ").strip()
+        if len(last_note) > 48:
+            last_note = last_note[:48].rstrip() + "..."
+        last_txt = f"🕒 Atualizado: {task.last_update_br}"
+        if last_note:
+            last_txt += f" — {last_note}"
+
+        lbl_last = ctk.CTkLabel(
+            meta_row,
+            text=last_txt,
+            font=ctk.CTkFont(size=11),
+            text_color=config.COLORS["text_muted"],
+            anchor="w",
+        )
+        lbl_last.pack(side="left", fill="x", expand=True)
+
+        # Clique em qualquer área do card (exceto botão/menu) seleciona a tarefa
+        for clickable in (card, bar, body, top_row, lbl_title, badges_row, meta_row, lbl_due, lbl_last):
+            clickable.bind("<Button-1>", lambda _e, tid=task.id: self.select_task(tid))
+
+    @staticmethod
+    def _make_pill(parent, text: str, fg_color):
+        pill = ctk.CTkLabel(
+            parent,
+            text=text,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color=fg_color,
+            text_color="#FFFFFF",
+            corner_radius=6,
+            padx=7,
+            pady=2,
+        )
+        pill.pack(side="left", padx=(0, 5))
+        return pill
+
+    def _highlight_selected_card(self):
+        for tid, card in self._card_frames.items():
+            if not card.winfo_exists():
+                continue
+            if tid == self.selected_task_id:
+                card.configure(border_width=2, border_color=config.COLORS["primary"])
+            else:
+                card.configure(border_width=1, border_color=config.COLORS["border_dark"])
+
+    def select_task(self, task_id: int):
+        """Seleciona uma tarefa na listagem e exibe seus detalhes completos à direita."""
+        self.selected_task_id = task_id
+        self._highlight_selected_card()
+        task = self.task_service.get_task_by_id(task_id, self.current_user.id, include_details=True)
+        self._render_task_details(task)
+
+    # ==========================================================================
+    # PAINEL DE DETALHES DA TAREFA (INFORMAÇÕES GERAIS, AÇÕES E ANDAMENTO)
+    # ==========================================================================
+
+    def _render_task_details(self, task: Optional[Task]):
+        for child in self.detail_scroll.winfo_children():
+            child.destroy()
+
+        if task is None:
+            empty = ctk.CTkFrame(self.detail_scroll, fg_color="transparent")
+            empty.pack(fill="both", expand=True, padx=16, pady=60)
+
+            ctk.CTkLabel(
+                empty,
+                text="📌 Detalhes da Tarefa",
+                font=ctk.CTkFont(size=16, weight="bold"),
+                text_color=config.COLORS["text_dark"],
+            ).pack(pady=(0, 6))
+
+            ctk.CTkLabel(
+                empty,
+                text="Clique em uma tarefa na listagem ao lado para consultar todas as informações,\nacompanhar o histórico cronológico e registrar novas atualizações de andamento.",
+                font=ctk.CTkFont(size=12),
                 text_color=config.COLORS["text_muted"],
-            )
-            lbl_empty_text.pack(pady=(0, 12))
+                justify="center",
+            ).pack(pady=(0, 16))
 
-            btn_empty_add = ctk.CTkButton(
-                empty_frame,
-                text="➕ Criar Primeiro Agendamento",
+            ctk.CTkButton(
+                empty,
+                text="➕ Criar Primeira Tarefa",
                 height=36,
                 corner_radius=8,
-                font=ctk.CTkFont(size=13, weight="bold"),
                 fg_color=config.COLORS["primary"],
                 hover_color=config.COLORS["primary_hover"],
                 text_color="#FFFFFF",
-                command=self._handle_new_schedule,
-            )
-            btn_empty_add.pack()
+                command=self._handle_new_task,
+            ).pack()
             return
 
-        for sched in schedules:
-            self._render_schedule_card(sched)
-
-    def _render_schedule_card(self, sched: Schedule):
-        card = ctk.CTkFrame(
-            self.scroll_list,
+        # ======================================================================
+        # SEÇÃO 1: INFORMAÇÕES GERAIS
+        # ======================================================================
+        info_card = ctk.CTkFrame(
+            self.detail_scroll,
             corner_radius=10,
             fg_color=config.COLORS["card_dark_alt"],
             border_width=1,
             border_color=config.COLORS["border_dark"],
         )
-        card.pack(fill="x", padx=10, pady=5)
+        info_card.pack(fill="x", padx=4, pady=(2, 10))
 
-        # Linha Superior do Card: Badges de Status, Data/Hora, Prioridade e Repetição
-        top_row = ctk.CTkFrame(card, fg_color="transparent")
-        top_row.pack(fill="x", padx=14, pady=(10, 4))
+        info_hdr = ctk.CTkFrame(info_card, fg_color="transparent")
+        info_hdr.pack(fill="x", padx=12, pady=(10, 4))
 
-        # Badge de Status
-        status_bg = config.COLORS["card_dark"]
-        status_fg = config.COLORS["text_dark"]
-        if sched.status == "concluido":
-            status_bg = config.COLORS["success"]
-            status_fg = "#FFFFFF"
-        elif sched.status == "notificado":
-            status_bg = config.COLORS["primary"]
-            status_fg = "#FFFFFF"
-        elif sched.is_due:
-            status_bg = config.COLORS["danger"]
-            status_fg = "#FFFFFF"
-
-        lbl_status = ctk.CTkLabel(
-            top_row,
-            text=f" {sched.status_label} ",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=status_bg,
-            text_color=status_fg,
-            corner_radius=6,
-        )
-        lbl_status.pack(side="left", padx=(0, 8))
-
-        # Badge Data e Horário
-        dt_text = f"📅 {sched.date_br} às 🕒 {sched.schedule_time}"
-        lbl_dt = ctk.CTkLabel(
-            top_row,
-            text=dt_text,
+        ctk.CTkLabel(
+            info_hdr,
+            text="📋 Informações Gerais",
             font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLORS["text_dark"],
-        )
-        lbl_dt.pack(side="left", padx=(0, 8))
-
-        # Badge Prioridade
-        lbl_prio = ctk.CTkLabel(
-            top_row,
-            text=f"• Prioridade: {sched.priority_label}",
-            font=ctk.CTkFont(size=11),
             text_color=config.COLORS["text_muted"],
-        )
-        lbl_prio.pack(side="left", padx=(0, 8))
+        ).pack(side="left")
 
-        # Badge Repetição se houver
-        if sched.repeat_interval and sched.repeat_interval != "none":
-            lbl_rep = ctk.CTkLabel(
-                top_row,
-                text=f"• {sched.repeat_label}",
-                font=ctk.CTkFont(size=11, weight="bold"),
-                text_color=config.COLORS["secondary"],
-            )
-            lbl_rep.pack(side="left")
+        ctk.CTkLabel(
+            info_hdr,
+            text=f"ID #{task.id}",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=config.COLORS["text_muted"],
+        ).pack(side="right")
 
-        # Linha do Meio: Título do Assunto
-        title_row = ctk.CTkFrame(card, fg_color="transparent")
-        title_row.pack(fill="x", padx=14, pady=(2, 4))
-
-        lbl_subject = ctk.CTkLabel(
-            title_row,
-            text=sched.title,
-            font=ctk.CTkFont(size=15, weight="bold"),
+        ctk.CTkLabel(
+            info_card,
+            text=task.title,
+            font=ctk.CTkFont(size=16, weight="bold"),
             text_color=config.COLORS["text_dark"],
             anchor="w",
+            justify="left",
+            wraplength=420,
+        ).pack(fill="x", padx=12, pady=(2, 6))
+
+        # Badges de estado
+        det_badges = ctk.CTkFrame(info_card, fg_color="transparent")
+        det_badges.pack(fill="x", padx=12, pady=(0, 8))
+
+        self._make_pill(
+            det_badges,
+            f"{STATUS_ICONS.get(task.status, '•')} {task.status_label}",
+            STATUS_COLORS.get(task.status, ("#2563EB", "#3B82F6")),
         )
-        lbl_subject.pack(side="left", fill="x", expand=True)
+        self._make_pill(
+            det_badges,
+            f"{PRIORITY_ICONS.get(task.priority, '🔵')} Prioridade {task.priority_label}",
+            PRIORITY_COLORS.get(task.priority, ("#2563EB", "#3B82F6")),
+        )
+        if task.is_overdue():
+            self._make_pill(det_badges, "⚠️ Atrasada", ("#DC2626", "#EF4444"))
+        elif task.is_due_today():
+            self._make_pill(det_badges, "☀️ Vence Hoje", ("#D97706", "#F59E0B"))
+        if task.category:
+            self._make_pill(det_badges, f"🏷️ {task.category}", ("#475569", "#475569"))
 
-        # Linha do Conteúdo / Nota (se houver)
-        if sched.content:
-            content_row = ctk.CTkFrame(card, fg_color="transparent")
-            content_row.pack(fill="x", padx=14, pady=(0, 8))
+        # Descrição inicial
+        desc_box = ctk.CTkFrame(
+            info_card,
+            corner_radius=8,
+            fg_color=config.COLORS["card_dark"],
+            border_width=1,
+            border_color=config.COLORS["border_dark"],
+        )
+        desc_box.pack(fill="x", padx=12, pady=(0, 8))
 
-            lbl_note = ctk.CTkLabel(
-                content_row,
-                text=sched.content,
-                font=ctk.CTkFont(size=12),
-                text_color=config.COLORS["text_muted"],
-                anchor="w",
-                justify="left",
-                wraplength=650,
-            )
-            lbl_note.pack(fill="x")
+        ctk.CTkLabel(
+            desc_box,
+            text=task.description if task.description else "Sem descrição inicial informada.",
+            font=ctk.CTkFont(size=12, slant="italic" if not task.description else "roman"),
+            text_color=config.COLORS["text_dark"] if task.description else config.COLORS["text_muted"],
+            anchor="w",
+            justify="left",
+            wraplength=400,
+        ).pack(fill="x", padx=10, pady=8)
 
-        # Linha Inferior: Botões de Ação
-        actions_row = ctk.CTkFrame(card, fg_color="transparent")
-        actions_row.pack(fill="x", padx=14, pady=(0, 10))
+        # Grade de datas e metadados
+        meta_grid = ctk.CTkFrame(info_card, fg_color="transparent")
+        meta_grid.pack(fill="x", padx=12, pady=(0, 10))
+        meta_grid.grid_columnconfigure(0, weight=1)
+        meta_grid.grid_columnconfigure(1, weight=1)
 
-        # Botão Concluir ou Reabrir
-        if sched.status != "concluido":
-            btn_complete = ctk.CTkButton(
-                actions_row,
-                text="✔️ Concluir",
-                width=90,
-                height=28,
-                corner_radius=6,
+        meta_items = [
+            ("📅 Cadastro:", task.created_at_br or "-"),
+            ("🚀 Início:", task.start_date_br or "-"),
+            ("🎯 Data prevista:", task.due_display),
+            (
+                "✅ Concluída em:" if task.completed_at else "🕒 Última atualização:",
+                task.completed_at_br if task.completed_at else (task.last_update_br or "-"),
+            ),
+        ]
+        for idx, (lbl_k, lbl_v) in enumerate(meta_items):
+            r_idx, c_idx = divmod(idx, 2)
+            cell = ctk.CTkFrame(meta_grid, fg_color="transparent")
+            cell.grid(row=r_idx, column=c_idx, sticky="ew", padx=(0, 6), pady=2)
+            ctk.CTkLabel(
+                cell,
+                text=lbl_k,
                 font=ctk.CTkFont(size=11, weight="bold"),
-                fg_color=config.COLORS["success"],
-                hover_color=config.COLORS["success_hover"],
-                text_color="#FFFFFF",
-                command=lambda s=sched: self._handle_toggle_complete(s, "concluido"),
-            )
-            btn_complete.pack(side="left", padx=(0, 6))
-        else:
-            btn_reopen = ctk.CTkButton(
-                actions_row,
-                text="↩️ Reabrir",
-                width=90,
-                height=28,
-                corner_radius=6,
+                text_color=config.COLORS["text_muted"],
+            ).pack(side="left", padx=(0, 4))
+            ctk.CTkLabel(
+                cell,
+                text=lbl_v,
                 font=ctk.CTkFont(size=11),
-                fg_color=config.COLORS["card_dark"],
-                hover_color=config.COLORS["primary"],
-                text_color=config.COLORS["button_text"],
-                command=lambda s=sched: self._handle_toggle_complete(s, "pendente"),
-            )
-            btn_reopen.pack(side="left", padx=(0, 6))
+                text_color=config.COLORS["text_dark"],
+            ).pack(side="left")
 
-        # Botão Editar
-        btn_edit = ctk.CTkButton(
-            actions_row,
+        # Lembretes vinculados
+        if task.reminders:
+            rem_box = ctk.CTkFrame(
+                info_card,
+                corner_radius=8,
+                fg_color=config.COLORS["card_dark"],
+            )
+            rem_box.pack(fill="x", padx=12, pady=(0, 10))
+
+            ctk.CTkLabel(
+                rem_box,
+                text="🔔 Lembretes configurados:",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=config.COLORS["text_dark"],
+                anchor="w",
+            ).pack(fill="x", padx=10, pady=(6, 2))
+
+            for rem in task.reminders:
+                status_rem = " (enviado)" if rem.is_sent else (" (pausado)" if not rem.is_active else " (ativo)")
+                ctk.CTkLabel(
+                    rem_box,
+                    text=f"• {rem.summary_text}{status_rem}",
+                    font=ctk.CTkFont(size=11),
+                    text_color=config.COLORS["text_muted"],
+                    anchor="w",
+                ).pack(fill="x", padx=14, pady=(0, 3))
+
+        # ======================================================================
+        # SEÇÃO 2: AÇÕES
+        # ======================================================================
+        actions_card = ctk.CTkFrame(
+            self.detail_scroll,
+            corner_radius=10,
+            fg_color=config.COLORS["card_dark_alt"],
+            border_width=1,
+            border_color=config.COLORS["border_dark"],
+        )
+        actions_card.pack(fill="x", padx=4, pady=(0, 10))
+
+        ctk.CTkLabel(
+            actions_card,
+            text="⚡ Ações",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLORS["text_muted"],
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(8, 6))
+
+        # Linha 1 de ações: Alterar Status + Concluir/Reabrir
+        status_act_row = ctk.CTkFrame(actions_card, fg_color="transparent")
+        status_act_row.pack(fill="x", padx=12, pady=(0, 6))
+
+        ctk.CTkLabel(
+            status_act_row,
+            text="Status:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLORS["text_dark"],
+        ).pack(side="left", padx=(0, 6))
+
+        self.detail_status_menu = ctk.CTkOptionMenu(
+            status_act_row,
+            values=list(STATUS_LABELS.values()),
+            width=142,
+            height=30,
+            corner_radius=6,
+            command=lambda val, tid=task.id: self._handle_detail_status_change(tid, val),
+        )
+        self._updating_detail_controls = True
+        self.detail_status_menu.set(task.status_label)
+        self._updating_detail_controls = False
+        self.detail_status_menu.pack(side="left", padx=(0, 8))
+
+        if task.is_open:
+            ctk.CTkButton(
+                status_act_row,
+                text="✅ Concluir Tarefa",
+                height=30,
+                corner_radius=6,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color=("#059669", "#10B981"),
+                hover_color=("#047857", "#059669"),
+                text_color="#FFFFFF",
+                command=lambda t=task: self._handle_complete_task(t),
+            ).pack(side="left", fill="x", expand=True)
+        else:
+            ctk.CTkButton(
+                status_act_row,
+                text="🔄 Reabrir Tarefa",
+                height=30,
+                corner_radius=6,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color=config.COLORS["primary"],
+                hover_color=config.COLORS["primary_hover"],
+                text_color="#FFFFFF",
+                command=lambda t=task: self._handle_reopen_task(t),
+            ).pack(side="left", fill="x", expand=True)
+
+        # Linha 2 de ações: Editar, Notificar, Diário, Excluir
+        btns_row = ctk.CTkFrame(actions_card, fg_color="transparent")
+        btns_row.pack(fill="x", padx=12, pady=(0, 10))
+
+        ctk.CTkButton(
+            btns_row,
             text="✏️ Editar",
-            width=80,
-            height=28,
+            width=82,
+            height=30,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["primary"],
+            text_color=config.COLORS["button_text"],
+            command=lambda t=task: self._handle_edit_task(t),
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            btns_row,
+            text="🔔 Notificar",
+            width=88,
+            height=30,
             corner_radius=6,
             font=ctk.CTkFont(size=11),
             fg_color=config.COLORS["card_dark"],
             hover_color=config.COLORS["primary"],
             text_color=config.COLORS["button_text"],
-            command=lambda s=sched: self._handle_edit_schedule(s),
-        )
-        btn_edit.pack(side="left", padx=(0, 6))
+            command=lambda t=task: self._handle_manual_notify(t),
+        ).pack(side="left", padx=(0, 6))
 
-        # Botão Abrir no Diário da Data
-        if self.on_open_diary_date is not None:
-            btn_diary = ctk.CTkButton(
-                actions_row,
-                text="📝 Abrir no Diário",
-                width=120,
-                height=28,
+        if task.due_date and self.on_open_diary_date:
+            ctk.CTkButton(
+                btns_row,
+                text="📓 Diário",
+                width=78,
+                height=30,
                 corner_radius=6,
                 font=ctk.CTkFont(size=11),
                 fg_color=config.COLORS["card_dark"],
                 hover_color=config.COLORS["primary"],
                 text_color=config.COLORS["button_text"],
-                command=lambda d=sched.schedule_date: self.on_open_diary_date(d),
-            )
-            btn_diary.pack(side="left", padx=(0, 6))
+                command=lambda d=task.due_date: self.on_open_diary_date(d, self.current_user.id),
+            ).pack(side="left", padx=(0, 6))
 
-        # Botão Disparar Notificação de Teste
-        btn_notif = ctk.CTkButton(
-            actions_row,
-            text="🔔 Testar Aviso",
-            width=100,
-            height=28,
-            corner_radius=6,
-            font=ctk.CTkFont(size=11),
-            fg_color=config.COLORS["card_dark"],
-            hover_color=config.COLORS["warning"],
-            text_color=config.COLORS["button_text"],
-            command=lambda s=sched: self._handle_manual_notify(s),
-        )
-        btn_notif.pack(side="left", padx=(0, 6))
-
-        # Botão Excluir
-        btn_delete = ctk.CTkButton(
-            actions_row,
+        ctk.CTkButton(
+            btns_row,
             text="🗑️ Excluir",
-            width=80,
-            height=28,
+            width=82,
+            height=30,
             corner_radius=6,
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=11, weight="bold"),
             fg_color=config.COLORS["card_dark"],
             hover_color=config.COLORS["danger"],
             text_color=config.COLORS["button_text"],
-            command=lambda s=sched: self._handle_delete_schedule(s),
+            command=lambda t=task: self._handle_delete_task(t),
+        ).pack(side="right")
+
+        # ======================================================================
+        # SEÇÃO 3: ANDAMENTO E HISTÓRICO CRONOLÓGICO
+        # ======================================================================
+        progress_card = ctk.CTkFrame(
+            self.detail_scroll,
+            corner_radius=10,
+            fg_color=config.COLORS["card_dark_alt"],
+            border_width=1,
+            border_color=config.COLORS["border_dark"],
         )
-        btn_delete.pack(side="right")
+        progress_card.pack(fill="x", padx=4, pady=(0, 6))
 
-    def _handle_new_schedule(self):
-        diag = ScheduleModalDialog(self, "Novo Agendamento")
-        if diag.result:
-            res = diag.result
-            new_s, msg = self.schedule_service.create_schedule(
-                user_id=self.current_user.id,
-                title=res["title"],
-                content=res["content"],
-                schedule_date=res["schedule_date"],
-                schedule_time=res["schedule_time"],
-                priority=res["priority"],
-                repeat_interval=res["repeat_interval"],
-            )
-            if new_s:
-                show_message(self, "Sucesso", msg, kind="success")
-                self.refresh()
-            else:
-                show_message(self, "Erro", msg, kind="danger")
+        prog_hdr = ctk.CTkFrame(progress_card, fg_color="transparent")
+        prog_hdr.pack(fill="x", padx=12, pady=(10, 4))
 
-    def _handle_edit_schedule(self, sched: Schedule):
-        diag = ScheduleModalDialog(self, f"Editar Agendamento #{sched.id}", schedule=sched)
-        if diag.result:
-            res = diag.result
-            ok, msg = self.schedule_service.update_schedule(
-                schedule_id=sched.id,
-                user_id=self.current_user.id,
-                title=res["title"],
-                content=res["content"],
-                schedule_date=res["schedule_date"],
-                schedule_time=res["schedule_time"],
-                priority=res["priority"],
-                repeat_interval=res["repeat_interval"],
-            )
-            if ok:
-                show_message(self, "Sucesso", msg, kind="success")
-                self.refresh()
-            else:
-                show_message(self, "Erro", msg, kind="danger")
+        ctk.CTkLabel(
+            prog_hdr,
+            text=f"📝 Andamento e Histórico ({len(task.history)})",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=config.COLORS["text_dark"],
+        ).pack(side="left")
 
-    def _handle_toggle_complete(self, sched: Schedule, target_status: str):
-        ok, msg = self.schedule_service.set_status(sched.id, self.current_user.id, target_status)
+        order_lbl = "Mais recentes ↓" if self.history_descending else "Cronológico ↑"
+        ctk.CTkButton(
+            prog_hdr,
+            text=order_lbl,
+            width=108,
+            height=24,
+            corner_radius=6,
+            font=ctk.CTkFont(size=10),
+            fg_color=config.COLORS["card_dark"],
+            hover_color=config.COLORS["border_dark"],
+            text_color=config.COLORS["text_muted"],
+            command=self._toggle_history_order,
+        ).pack(side="right")
+
+        ctk.CTkLabel(
+            progress_card,
+            text="Adicionar nova atualização ou observação (Ctrl+Enter para registrar):",
+            font=ctk.CTkFont(size=11),
+            text_color=config.COLORS["text_muted"],
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(2, 4))
+
+        self.txt_new_update = ctk.CTkTextbox(
+            progress_card,
+            height=74,
+            corner_radius=8,
+            border_width=1,
+            border_color=config.COLORS["border_dark"],
+            fg_color=config.COLORS["card_dark"],
+            text_color=config.COLORS["text_dark"],
+        )
+        self.txt_new_update.pack(fill="x", padx=12, pady=(0, 6))
+        self.txt_new_update.bind(
+            "<Control-Return>", lambda _e, tid=task.id: self._handle_add_progress_update(tid)
+        )
+
+        add_bar = ctk.CTkFrame(progress_card, fg_color="transparent")
+        add_bar.pack(fill="x", padx=12, pady=(0, 10))
+
+        self.opt_update_status = ctk.CTkOptionMenu(
+            add_bar,
+            values=["Manter status atual"] + list(STATUS_LABELS.values()),
+            width=155,
+            height=32,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11),
+        )
+        self.opt_update_status.set("Manter status atual")
+        self.opt_update_status.pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            add_bar,
+            text="➕ Registrar Atualização",
+            height=32,
+            corner_radius=7,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=config.COLORS["primary"],
+            hover_color=config.COLORS["primary_hover"],
+            text_color="#FFFFFF",
+            command=lambda tid=task.id: self._handle_add_progress_update(tid),
+        ).pack(side="left", fill="x", expand=True)
+
+        # Histórico completo de atualizações
+        hist_entries = list(reversed(task.history)) if self.history_descending else list(task.history)
+
+        if not hist_entries:
+            ctk.CTkLabel(
+                progress_card,
+                text="Nenhuma atualização registrada ainda.",
+                font=ctk.CTkFont(size=11, slant="italic"),
+                text_color=config.COLORS["text_muted"],
+            ).pack(padx=12, pady=(4, 12))
+        else:
+            timeline = ctk.CTkFrame(progress_card, fg_color="transparent")
+            timeline.pack(fill="x", padx=12, pady=(0, 12))
+
+            for entry in hist_entries:
+                st_key = normalize_status(entry.status_at_time)
+                st_color = STATUS_COLORS.get(st_key, ("#2563EB", "#3B82F6"))
+
+                item_card = ctk.CTkFrame(
+                    timeline,
+                    corner_radius=8,
+                    fg_color=config.COLORS["card_dark"],
+                    border_width=1,
+                    border_color=config.COLORS["border_dark"],
+                )
+                item_card.pack(fill="x", pady=3)
+
+                dot_bar = ctk.CTkFrame(item_card, width=4, corner_radius=2, fg_color=st_color)
+                dot_bar.pack(side="left", fill="y", padx=(6, 8), pady=6)
+
+                item_body = ctk.CTkFrame(item_card, fg_color="transparent")
+                item_body.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=6)
+
+                item_top = ctk.CTkFrame(item_body, fg_color="transparent")
+                item_top.pack(fill="x")
+
+                ctk.CTkLabel(
+                    item_top,
+                    text=f"🕒 {entry.created_at_br}",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=config.COLORS["text_muted"],
+                ).pack(side="left")
+
+                ctk.CTkLabel(
+                    item_top,
+                    text=entry.status_label,
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    fg_color=st_color,
+                    text_color="#FFFFFF",
+                    corner_radius=5,
+                    padx=6,
+                    pady=1,
+                ).pack(side="right")
+
+                ctk.CTkLabel(
+                    item_body,
+                    text=entry.note,
+                    font=ctk.CTkFont(size=12),
+                    text_color=config.COLORS["text_dark"],
+                    anchor="w",
+                    justify="left",
+                    wraplength=390,
+                ).pack(fill="x", pady=(4, 0))
+
+    def _toggle_history_order(self):
+        self.history_descending = not self.history_descending
+        if self.selected_task_id is not None:
+            self.select_task(self.selected_task_id)
+
+    # ==========================================================================
+    # AÇÕES DO USUÁRIO
+    # ==========================================================================
+
+    def _handle_new_task(self):
+        cats = self.task_service.list_categories(self.current_user.id)
+        diag = TaskFormDialog(self, "Nova Tarefa", categories=cats)
+        if not diag.result:
+            return
+        res = diag.result
+        new_task, msg = self.task_service.create_task(
+            user_id=self.current_user.id,
+            title=res["title"],
+            description=res["description"],
+            start_date=res["start_date"],
+            due_date=res["due_date"],
+            due_time=res["due_time"],
+            priority=res["priority"],
+            status=res["status"],
+            category=res["category"],
+            reminder_enabled=res["reminder_enabled"],
+            reminders=res["reminders"],
+        )
+        if new_task:
+            self.selected_task_id = new_task.id
+            self.refresh()
+            show_message(self, "Sucesso", msg, kind="success")
+        else:
+            show_message(self, "Erro", msg, kind="danger")
+
+    def _handle_edit_task(self, task: Task):
+        fresh = self.task_service.get_task_by_id(task.id, self.current_user.id, include_details=True) or task
+        cats = self.task_service.list_categories(self.current_user.id)
+        diag = TaskFormDialog(self, f"Editar Tarefa #{fresh.id}", task=fresh, categories=cats)
+        if not diag.result:
+            return
+        res = diag.result
+        ok, msg = self.task_service.update_task(
+            task_id=fresh.id,
+            user_id=self.current_user.id,
+            title=res["title"],
+            description=res["description"],
+            start_date=res["start_date"],
+            due_date=res["due_date"],
+            due_time=res["due_time"],
+            priority=res["priority"],
+            status=res["status"],
+            category=res["category"],
+            reminder_enabled=res["reminder_enabled"],
+            reminders=res["reminders"],
+        )
         if ok:
+            self.selected_task_id = fresh.id
+            self.refresh()
+            show_message(self, "Sucesso", msg, kind="success")
+        else:
+            show_message(self, "Erro", msg, kind="danger")
+
+    def _handle_quick_toggle_complete(self, task: Task):
+        if task.is_completed:
+            ok, msg = self.task_service.reopen_task(task.id, self.current_user.id, target_status="pendente")
+        else:
+            ok, msg = self.task_service.complete_task(task.id, self.current_user.id)
+        if ok:
+            self.selected_task_id = task.id
             self.refresh()
         else:
             show_message(self, "Erro", msg, kind="danger")
 
-    def _handle_delete_schedule(self, sched: Schedule):
+    def _handle_inline_status_change(self, task_id: int, status_label: str):
+        new_status = self._status_label_to_key.get(status_label, "pendente")
+        ok, msg = self.task_service.change_status(task_id, self.current_user.id, new_status)
+        if ok:
+            self.selected_task_id = task_id
+            self.refresh()
+        else:
+            show_message(self, "Erro", msg, kind="danger")
+
+    def _handle_detail_status_change(self, task_id: int, status_label: str):
+        if self._updating_detail_controls:
+            return
+        self._handle_inline_status_change(task_id, status_label)
+
+    def _handle_complete_task(self, task: Task):
+        ok, msg = self.task_service.complete_task(task.id, self.current_user.id)
+        if ok:
+            self.selected_task_id = task.id
+            self.refresh()
+        else:
+            show_message(self, "Erro", msg, kind="danger")
+
+    def _handle_reopen_task(self, task: Task):
+        ok, msg = self.task_service.reopen_task(task.id, self.current_user.id, target_status="em_andamento")
+        if ok:
+            self.selected_task_id = task.id
+            self.refresh()
+        else:
+            show_message(self, "Erro", msg, kind="danger")
+
+    def _handle_delete_task(self, task: Task):
         confirmed = ask_confirmation(
             self,
-            "Excluir Agendamento",
-            f"Deseja realmente excluir o agendamento '{sched.title}'?",
+            "Excluir Tarefa",
+            f"Deseja realmente excluir a tarefa '{task.title}'?\nTodo o histórico e lembretes desta tarefa serão removidos.",
             kind="danger",
         )
-        if confirmed:
-            ok, msg = self.schedule_service.delete_schedule(sched.id, self.current_user.id)
-            if ok:
-                self.refresh()
-            else:
-                show_message(self, "Erro", msg, kind="danger")
+        if not confirmed:
+            return
+        ok, msg = self.task_service.delete_task(task.id, self.current_user.id)
+        if ok:
+            if self.selected_task_id == task.id:
+                self.selected_task_id = None
+            self.refresh()
+        else:
+            show_message(self, "Erro", msg, kind="danger")
+
+    def _handle_add_progress_update(self, task_id: int):
+        if not hasattr(self, "txt_new_update") or not self.txt_new_update.winfo_exists():
+            return
+        note_text = self.txt_new_update.get("1.0", "end-1c").strip()
+        if not note_text:
+            show_message(
+                self,
+                "Campo Vazio",
+                "Digite uma informação ou observação de andamento antes de registrar.",
+                kind="warning",
+            )
+            return
+
+        chosen_status_lbl = self.opt_update_status.get()
+        new_status = (
+            None
+            if chosen_status_lbl == "Manter status atual"
+            else self._status_label_to_key.get(chosen_status_lbl)
+        )
+
+        entry, msg = self.task_service.add_progress_update(
+            task_id=task_id,
+            user_id=self.current_user.id,
+            note=note_text,
+            new_status=new_status,
+        )
+        if entry:
+            self.selected_task_id = task_id
+            self.refresh()
+        else:
+            show_message(self, "Erro", msg, kind="danger")
+
+    def open_task_by_id(self, task_id: Optional[int]):
+        """Abre e destaca diretamente a tarefa solicitada (ex.: ao clicar em notificação Toast)."""
+        if task_id is None:
+            self.refresh()
+            return
+        task = self.task_service.get_task_by_id(task_id, self.current_user.id, include_details=True)
+        if task is None:
+            task = self.task_service.get_task_by_legacy_schedule_id(task_id, self.current_user.id)
+        if task is not None:
+            self.current_tab = "todas"
+            self.selected_task_id = task.id
+        self.refresh()
 
     def open_schedule_by_id(self, schedule_id: Optional[int]):
-        """Atualiza a lista e abre o modal do agendamento solicitado (ex: via notificação)."""
-        self.refresh()
-        if schedule_id is None:
-            return
-        sched = self.schedule_service.get_schedule_by_id(schedule_id, self.current_user.id)
-        if sched is not None:
-            self.after(100, lambda s=sched: self._handle_edit_schedule(s))
+        """Mantém compatibilidade com notificações do protocolo legado dailynotes://schedule/open."""
+        self.open_task_by_id(schedule_id)
 
-    def _handle_manual_notify(self, sched: Schedule):
-        preview = sched.content[:120].replace("\n", " ") if sched.content else ""
-        msg = f"Horário: {sched.schedule_time} ({sched.date_br})\n{preview}".strip()
+    def _handle_manual_notify(self, task: Task):
+        preview = task.description[:120].replace("\n", " ") if task.description else ""
+        msg = f"Prazo: {task.due_display} | Prioridade: {task.priority_label}"
+        if preview:
+            msg += f"\n{preview}"
         send_windows_notification(
-            title=f"⏰ DailyNotes: {sched.title}",
+            title=f"⏰ Tarefa DailyNotes: {task.title}",
             message=msg,
             play_sound=True,
-            schedule_id=sched.id,
+            task_id=task.id,
         )
         show_message(
             self,
             "Notificação Enviada",
-            "A notificação do Windows foi disparada para a Central de Ações!",
+            "A notificação vinculada à tarefa foi disparada para a Central de Ações do Windows!",
             kind="info",
         )
 
@@ -888,7 +1523,7 @@ class SchedulesView(ctk.CTkFrame):
         now_time = datetime.datetime.now().strftime("%H:%M")
         send_windows_notification(
             title="⏰ DailyNotes - Teste de Notificação",
-            message=f"Esta é uma notificação nativa do Windows disparada com sucesso às {now_time}!",
+            message=f"As notificações do Gerenciador de Tarefas estão funcionando às {now_time}!",
             play_sound=True,
         )
         show_message(
@@ -897,4 +1532,3 @@ class SchedulesView(ctk.CTkFrame):
             "Aviso disparado para a Central de Ações do Windows!",
             kind="success",
         )
-

@@ -30,6 +30,7 @@ from utils.editor_history import (
     commit_history_before_action,
     record_history_after_action,
 )
+from utils.editor_shortcuts import EditorAssistController
 from services.spellcheck_service import WindowsSpellCheckService, SpellingError
 from utils.syntax_highlighter import (
     convert_selection_case,
@@ -275,7 +276,7 @@ class DiaryView(ctk.CTkFrame):
         self.btn_import = self.responsive_action_bar.add_button(
             key="import",
             symbol_text="📥 Importar",
-            full_label="📥 Importar Anotações de Arquivo TXT",
+            full_label="📥 Importar Arquivos (TXT, DOC, DOCX, XML, BAT, SQL)",
             command=self._on_import_clicked,
             width=90,
             height=32,
@@ -566,6 +567,14 @@ class DiaryView(ctk.CTkFrame):
             btn_italic=self.btn_italic,
             btn_underline=self.btn_underline,
             btn_overstrike=self.btn_overstrike,
+        )
+
+        # Atalhos inteligentes: F5 (data e hora atual) e Ctrl+Space (autocompletar / corrigir ortografia)
+        self.editor_assist = EditorAssistController(
+            self.txt_content,
+            spell_service_getter=lambda: self.spell_service,
+            on_change_callback=self._on_text_modified,
+            on_after_spell_change=self._run_spellcheck,
         )
 
         # 4. Barra de Status Inferior

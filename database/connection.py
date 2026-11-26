@@ -22,11 +22,14 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     conn = sqlite3.connect(target_path, timeout=20.0)
     conn.row_factory = sqlite3.Row
 
-    # Configurações do SQLite
+    # Configurações do SQLite voltadas para integridade e alta performance
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    conn.execute("PRAGMA cache_size = -16000;")
     if target_path != ":memory:":
         try:
             conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA synchronous = NORMAL;")
         except Exception:
             pass
 

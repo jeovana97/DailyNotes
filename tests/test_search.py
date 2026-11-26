@@ -180,6 +180,69 @@ class TestSearchService(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_trigram_substring_short_query_and_special_chars(self):
+        """Valida busca FTS5 trigram para substrings, termos curtos (<3 chars) e pontuação/aspas."""
+        from services.note_service import NoteService
+
+        note_svc = NoteService(db_path=self.db_path)
+        self.diary_service.save_entry(
+            self.user1.id,
+            "2026-11-18",
+            'URL https://www.nfse.gov.br/EmissorNacional/Login com erro "502" e código IP.',
+        )
+        note_svc.save_note(
+            user_id=self.user1.id,
+            title="Configuração EmissorNacional",
+            content='Ajuste de timeout para "502" e porta IP interna.',
+        )
+
+        # Substring no meio de palavra composta (trigram)
+        res_sub = self.search_service.search_all(requester=self.user1, query="nacional", scope="all")
+        self.assertEqual(len(res_sub), 2)
+
+        # Termo com caracteres especiais / aspas / cerquilha
+        res_hash = self.search_service.search_all(requester=self.user1, query="#8492", scope="all")
+        self.assertEqual(len(res_hash), 1)
+        res_quote = self.search_service.search_all(requester=self.user1, query='"502"', scope="all")
+        self.assertEqual(len(res_quote), 2)
+
+        # Termo curto (< 3 caracteres -> fallback instr em C nativo)
+        res_short = self.search_service.search_all(requester=self.user1, query="ip", scope="all")
+        self.assertEqual(len(res_short), 2)
+
+    def test_search_performance_and_legacy_migration_backfill(self):
+        """Garante backfill de content_normalized/FTS trigram em bancos legados e baixa latência em volume."""
+        import sqlite3
+        import time
+
+        # Simula 250 anotações em volume e mede latência de busca unificada
+        for day_idx in range(1, 251):
+            month = ((day_idx - 1) // 28) + 1
+            day = ((day_idx - 1) % 28) + 1
+            date_iso = f"2025-{month:02d}-{day:02d}"
+            extra = "EmissorNacional NFSe homologação" if day_idx % 25 == 0 else "Rotina diária operacional"
+            self.diary_service.save_entry(
+                self.user1.id,
+                date_iso,
+                f"Registro #{day_idx}: {extra}. " + ("detalhes técnicos de sistema " * 20),
+            )
+
+        t0 = time.perf_counter()
+        res = self.search_service.search_all(requester=self.user1, query="emissornacional", scope="all")
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        self.assertEqual(len(res), 10)
+        # Busca indexada em 250+ registros deve levar apenas poucos milissegundos (folga ampla p/ CI)
+        self.assertLess(elapsed_ms, 500.0)
+
+        # Verifica que o índice B-Tree inútil idx_diaries_content_norm não existe e trigram está ativo
+        conn = sqlite3.connect(self.db_path)
+        idx_names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
+        tbl_names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        conn.close()
+        self.assertNotIn("idx_diaries_content_norm", idx_names)
+        self.assertIn("diaries_fts_trigram", tbl_names)
+        self.assertIn("notes_fts_trigram", tbl_names)
+
 
 if __name__ == "__main__":
     unittest.main()

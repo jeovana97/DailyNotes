@@ -123,6 +123,10 @@ def parse_toast_protocol_url(url: str) -> Optional[Dict[str, Any]]:
             return {"action": "open", "schedule_id": schedule_id}
         if action_path in ("schedule/snooze", "snooze"):
             return {"action": "snooze", "schedule_id": schedule_id, "minutes": minutes}
+        if action_path == "task/open":
+            return {"action": "open_task", "task_id": schedule_id, "schedule_id": schedule_id}
+        if action_path == "task/snooze":
+            return {"action": "snooze_task", "task_id": schedule_id, "schedule_id": schedule_id, "minutes": minutes}
         return None
     except Exception:
         return None
@@ -210,6 +214,7 @@ def send_windows_notification(
     run_async: bool = True,
     schedule_id: Optional[int] = None,
     snooze_minutes: int = 10,
+    task_id: Optional[int] = None,
 ) -> bool:
     """
     Exibe uma notificação nativa do Windows (Toast Notification) na Central de Ações.
@@ -247,7 +252,17 @@ def send_windows_notification(
                 icon_uri = xml_escape(Path(icon_path).as_uri())
                 image_xml = f'<image placement="appLogoOverride" hint-crop="circle" src="{icon_uri}"/>'
 
-            if schedule_id is not None:
+            if task_id is not None:
+                open_arg = xml_escape(f"{PROTOCOL_SCHEME}://task/open?id={int(task_id)}")
+                snooze_arg = xml_escape(
+                    f"{PROTOCOL_SCHEME}://task/snooze?id={int(task_id)}&minutes={int(snooze_minutes)}"
+                )
+                actions_xml = f"""
+    <actions>
+        <action content="✅ Abrir Tarefa" activationType="protocol" arguments="{open_arg}"/>
+        <action content="⏰ Adiar {int(snooze_minutes)} min" activationType="protocol" arguments="{snooze_arg}"/>
+    </actions>"""
+            elif schedule_id is not None:
                 open_arg = xml_escape(f"{PROTOCOL_SCHEME}://schedule/open?id={int(schedule_id)}")
                 snooze_arg = xml_escape(
                     f"{PROTOCOL_SCHEME}://schedule/snooze?id={int(schedule_id)}&minutes={int(snooze_minutes)}"

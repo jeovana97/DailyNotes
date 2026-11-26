@@ -7,6 +7,28 @@ e este projeto adere ao [Semantic Versioning (SemVer)](https://semver.org/lang/p
 
 ---
 
+## [1.8.0] - 2026-11-26
+### Added
+- **Gerenciador Completo de Tarefas no menu Agendamentos** (estilo Microsoft To Do integrado ao Diário):
+  - Novas tabelas SQLite dedicadas (`tarefas`, `historico_tarefas`, `lembretes_tarefas`) com integridade referencial (`ON DELETE CASCADE`) e migração automática segura e idempotente dos agendamentos legados (`schedules`), mantendo compatibilidade total com backup e restauração.
+  - Cadastro e edição completos (`views/components/task_dialogs.py` — `TaskFormDialog`) com título, descrição inicial, data de início, data prevista, horário opcional, prioridade (**Baixa**, **Média**, **Alta**, **Urgente**), status (**Pendente**, **Em andamento**, **Concluída**, **Cancelada**), categoria opcional e configuração detalhada de lembretes.
+  - Histórico cronológico imutável de andamento (`services/task_history_service.py`) preservando todas as observações e mudanças de status com data, horário e status no momento, sem sobrescrever registros anteriores.
+  - Conclusão automática com registro de data/hora (`completed_at`) e reabertura preservando integralmente todo o histórico.
+  - Tela principal em layout Split-View (`views/schedules_view.py`) com indicadores clicáveis (*Pendentes*, *Em andamento*, *Concluídas*, *Atrasadas*, *Para hoje*), 8 abas de filtro, destaque de tarefas do dia, pesquisa por título/descrição/conteúdo do histórico, filtros por período/status/prioridade, ordenação por 4 critérios, alteração rápida de status na listagem e painel completo de detalhes (*Informações gerais*, *Ações* e *Andamento*).
+  - Sistema modular de lembretes vinculados às tarefas (`services/task_reminder_service.py`) com suporte a data/horário personalizados (com repetição), aviso no dia do vencimento, aviso antecipado, lembrete diário de tarefa atrasada, prevenção contra notificações repetidas e protocolo Toast (`dailynotes://task/open` e `dailynotes://task/snooze`).
+- **Importação de documentos Word (`.doc` e `.docx`)**: novo leitor universal (`utils/document_reader.py`) integrado à tela de Importação, Notas & Pastas e Diário, com suporte a OOXML (`.docx`), OLE2 binário (`.doc` via Word COM + extrator nativo em Python puro), RTF, Word 2003 XML plano, HTML/MHTML e texto puro, preservando parágrafos, tabelas e codificações e ignorando arquivos temporários (`~$`).
+- **Atalhos produtivos de edição (`utils/editor_shortcuts.py`)** no Diário do Dia, Notas & Pastas e janela de leitura/edição:
+  - **`F5`**: insere a data e hora atual (`DD/MM/AAAA HH:MM`) na posição do cursor com suporte completo a `Ctrl+Z`.
+  - **`Ctrl + Space`**: completa a frase/sugestão do corretor ou corrige automaticamente erro ortográfico sob o cursor ou ao final do texto, integrado ao histórico de desfazer.
+
+### Changed
+- **Performance da Pesquisa Avançada**: adicionados índices virtuais **SQLite FTS5 `trigram`** (`diaries_fts_trigram` e `notes_fts_trigram`) com backfill automático, consultas otimizadas em C nativo para substrings sem acento, cards leves e paginação progressiva na interface (`views/search_view.py`), reduzindo drasticamente o tempo de pesquisa em grandes bases.
+
+### Fixed
+- Corrigida a importação de arquivos com extensão `.docx` que internamente possuem formato RTF, OLE2 binário, Word XML plano, HTML/MHTML ou texto simples (eliminando o erro `File is not a zip file`), passando a identificar o formato real pela assinatura de bytes do arquivo.
+
+---
+
 ## [1.7.0] - 2026-11-24
 ### Added
 - Suporte e botão **Itálico (`I` / `Ctrl+I`)** no **Diário do Dia**, em **Notas & Pastas** e na janela de leitura/edição (`DiaryNoteReaderDialog`), combinável com Fonte, Tamanho, Negrito, Sublinhado e Riscado com persistência em `formatting_json`.

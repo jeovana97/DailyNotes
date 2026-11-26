@@ -16,6 +16,7 @@ from services.backup_service import BackupService
 from services.spellcheck_service import WindowsSpellCheckService
 from services.update_service import UpdateService
 from services.schedule_service import ScheduleService
+from services.task_service import TaskService
 from utils.notification_utils import consume_pending_toast_action
 
 from views.login_view import LoginView
@@ -323,6 +324,8 @@ class MainWindow(ctk.CTk):
         self.spell_service = WindowsSpellCheckService(db_path=self.db_path)
         self.update_service = UpdateService(current_version=config.APP_VERSION)
         self.schedule_service = ScheduleService(db_path=self.db_path)
+        self.task_service = TaskService(db_path=self.db_path)
+        self.task_reminder_service = self.task_service.reminder_service
 
         self.current_user: Optional[User] = None
         self.active_view = None
@@ -400,18 +403,20 @@ class MainWindow(ctk.CTk):
         user_theme = "light" if str(getattr(user, "theme_preference", "dark")).lower() == "light" else "dark"
         ctk.set_appearance_mode(user_theme)
         self._build_main_layout()
-        # Verifica se há solicitação pendente para abrir um agendamento via notificação
+        # Verifica se há solicitação pendente para abrir uma tarefa/agendamento via notificação
         pending_action = consume_pending_toast_action()
-        if pending_action and pending_action.get("action") == "open_schedule":
+        if pending_action and pending_action.get("action") in ("open_schedule", "open_task"):
             self._pending_toast_open = True
-            self._pending_schedule_open_id = pending_action.get("schedule_id")
+            self._pending_schedule_open_id = pending_action.get("task_id") or pending_action.get("schedule_id")
 
         if self._pending_toast_open:
             sched_id = self._pending_schedule_open_id
             self._pending_toast_open = False
             self._pending_schedule_open_id = None
             self.navigate_to("schedules")
-            if hasattr(self.active_view, "open_schedule_by_id"):
+            if hasattr(self.active_view, "open_task_by_id"):
+                self.active_view.open_task_by_id(sched_id)
+            elif hasattr(self.active_view, "open_schedule_by_id"):
                 self.active_view.open_schedule_by_id(sched_id)
         else:
             self.navigate_to("diary")
@@ -841,6 +846,11 @@ class MainWindow(ctk.CTk):
                 configure_syntax_tags(self.active_view.txt_content._textbox)
             except Exception:
                 pass
+        if self.active_view and hasattr(self.active_view, "refresh_theme"):
+            try:
+                self.active_view.refresh_theme()
+            except Exception:
+                pass
 
     def _open_change_password_dialog(self):
         SelfPasswordChangeDialog(self, self.current_user.id, self.auth_service)
@@ -909,14 +919,16 @@ class MainWindow(ctk.CTk):
             pass
 
     def _run_reminder_check(self):
-        """Verifica se há agendamentos que atingiram a data/horário e dispara notificações do Windows."""
+        """Verifica se há tarefas/lembretes que atingiram a data/horário e dispara notificações do Windows."""
         self._reminder_timer_id = None
         try:
             if not self.winfo_exists():
                 return
             if self.current_user:
-                notified = self.schedule_service.check_and_notify_due_schedules(user_id=self.current_user.id)
-                if notified and hasattr(self.active_view, "refresh"):
+                notified_tasks = self.task_reminder_service.check_and_notify_due_reminders(
+                    user_id=self.current_user.id
+                )
+                if notified_tasks and hasattr(self.active_view, "refresh"):
                     self.active_view.refresh()
         except Exception:
             pass
@@ -945,8 +957,8 @@ class MainWindow(ctk.CTk):
             action_data = consume_pending_toast_action()
             if action_data:
                 act = action_data.get("action")
-                sched_id = action_data.get("schedule_id")
-                if act == "open_schedule":
+                target_id = action_data.get("task_id") or action_data.get("schedule_id")
+                if act in ("open_schedule", "open_task"):
                     # Traz a janela para o primeiro plano
                     try:
                         self.deiconify()
@@ -959,11 +971,13 @@ class MainWindow(ctk.CTk):
 
                     if self.current_user:
                         self.navigate_to("schedules")
-                        if hasattr(self.active_view, "open_schedule_by_id"):
-                            self.active_view.open_schedule_by_id(sched_id)
+                        if hasattr(self.active_view, "open_task_by_id"):
+                            self.active_view.open_task_by_id(target_id)
+                        elif hasattr(self.active_view, "open_schedule_by_id"):
+                            self.active_view.open_schedule_by_id(target_id)
                     else:
                         self._pending_toast_open = True
-                        self._pending_schedule_open_id = sched_id
+                        self._pending_schedule_open_id = target_id
                 elif act == "snooze_refresh":
                     if self.current_user and hasattr(self.active_view, "refresh"):
                         self.active_view.refresh()
@@ -1133,6 +1147,7 @@ class MainWindow(ctk.CTk):
                 self.content_frame,
                 current_user=self.current_user,
                 schedule_service=self.schedule_service,
+                task_service=self.task_service,
                 on_open_diary_date=self._open_diary_from_search,
             )
             self.active_view.pack(fill="both", expand=True)

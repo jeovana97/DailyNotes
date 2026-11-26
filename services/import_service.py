@@ -8,7 +8,7 @@ from database.schema import CREATE_IMPORT_HISTORY_TABLE
 from services.diary_service import DiaryService
 from services.note_service import NoteService
 from utils.date_utils import parse_date_from_filename, format_date_br, get_current_timestamp
-from utils.text_utils import detect_encoding
+from utils.document_reader import read_document_file
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,8 @@ class ConflictResolution(str, Enum):
     MERGE = "merge"        # Mescla o conteúdo, anexando com separador datado
 
 
-SUPPORTED_NOTE_EXTENSIONS: Tuple[str, ...] = (".txt", ".xml", ".bat", ".sql")
+SUPPORTED_NOTE_EXTENSIONS: Tuple[str, ...] = (".txt", ".xml", ".bat", ".sql", ".doc", ".docx")
+SUPPORTED_DIARY_EXTENSIONS: Tuple[str, ...] = (".txt", ".doc", ".docx")
 
 
 class ImportService:
@@ -153,15 +154,21 @@ class ImportService:
         finally:
             conn.close()
 
+    def read_file_with_formatting(self, file_path: str) -> Tuple[str, str, str]:
+        """
+        Lê o conteúdo do arquivo (.txt, .xml, .bat, .sql, .doc, .docx) preservando acentos,
+        quebras de linha e, quando aplicável (.docx/.doc), formatação rica em JSON.
+        Retorna (conteudo, codificacao_ou_formato, formatting_json).
+        """
+        return read_document_file(file_path)
+
     def read_file_content(self, file_path: str) -> Tuple[str, str]:
         """
         Lê o conteúdo do arquivo preservando acentos, caracteres especiais e quebras de linha.
-        Detecta a codificação automaticamente. Retorna (conteudo, codificacao_usada).
+        Detecta a codificação/formato automaticamente. Retorna (conteudo, codificacao_usada).
         """
-        encoding = detect_encoding(file_path)
-        with open(file_path, "r", encoding=encoding, errors="replace") as f:
-            content = f.read()
-        return content, encoding
+        content, encoding_or_fmt, _fmt_json = self.read_file_with_formatting(file_path)
+        return content, encoding_or_fmt
 
     # =========================================================================
     # Importação de Notas para Pastas (Sem exigência de formato de data)
@@ -175,7 +182,7 @@ class ImportService:
         conflict_resolution: ConflictResolution = ConflictResolution.SKIP,
     ) -> Dict[str, Any]:
         """
-        Importa um arquivo TXT para uma pasta do módulo 'Notas & Pastas'.
+        Importa um arquivo (.txt, .doc, .docx, .xml, .bat, .sql) para uma pasta do módulo 'Notas & Pastas'.
         Não exige formato de data no nome do arquivo: o nome do arquivo (sem extensão)
         torna-se o título da nota dentro da pasta escolhida.
         """
@@ -189,9 +196,9 @@ class ImportService:
             else "Raiz (Sem pasta)"
         )
 
-        # 1. Lê o conteúdo do arquivo
+        # 1. Lê o conteúdo (e eventual formatação rica) do arquivo
         try:
-            content, _enc = self.read_file_content(file_path)
+            content, _enc, fmt_json = self.read_file_with_formatting(file_path)
         except Exception as e:
             return {
                 "status": "error",
@@ -239,6 +246,7 @@ class ImportService:
                     content=content,
                     folder_id=folder_id,
                     note_id=existing_note.id,
+                    formatting_json=fmt_json,
                 )
                 self._record_import(
                     user_id=user_id,
@@ -297,6 +305,7 @@ class ImportService:
             title=note_title,
             content=content,
             folder_id=folder_id,
+            formatting_json=fmt_json,
         )
         self._record_import(
             user_id=user_id,
@@ -334,7 +343,9 @@ class ImportService:
 
         note_files = [
             f for f in os.listdir(folder_path)
-            if f.lower().endswith(SUPPORTED_NOTE_EXTENSIONS) and os.path.isfile(os.path.join(folder_path, f))
+            if not f.startswith("~$")
+            and f.lower().endswith(SUPPORTED_NOTE_EXTENSIONS)
+            and os.path.isfile(os.path.join(folder_path, f))
         ]
         note_files.sort(key=lambda fname: fname.lower())
 
@@ -425,7 +436,7 @@ class ImportService:
             }
 
         try:
-            content, _enc = self.read_file_content(file_path)
+            content, _enc, fmt_json = self.read_file_with_formatting(file_path)
         except Exception as e:
             return {
                 "status": "error",
@@ -456,7 +467,7 @@ class ImportService:
                     "message": f"Anotação de {format_date_br(date_iso)} já existe. Arquivo ignorado conforme escolha.",
                 }
             elif conflict_resolution == ConflictResolution.REPLACE:
-                self.diary_service.save_entry(user_id, date_iso, content)
+                self.diary_service.save_entry(user_id, date_iso, content, formatting_json=fmt_json)
                 self._record_import(user_id, filename, file_path, entry_date=date_iso, target_type="diary")
                 return {
                     "status": "imported",
@@ -482,7 +493,7 @@ class ImportService:
                     "message": f"Anotação de {format_date_br(date_iso)} mesclada com sucesso.",
                 }
 
-        self.diary_service.save_entry(user_id, date_iso, content)
+        self.diary_service.save_entry(user_id, date_iso, content, formatting_json=fmt_json)
         self._record_import(user_id, filename, file_path, entry_date=date_iso, target_type="diary")
         return {
             "status": "imported",
@@ -500,13 +511,15 @@ class ImportService:
         conflict_callback: Optional[Callable[[str, str], ConflictResolution]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> Dict[str, Any]:
-        """Importa todos os arquivos .txt datados de uma pasta para o Diário."""
+        """Importa todos os arquivos datados (.txt, .doc, .docx) de uma pasta para o Diário."""
         if not os.path.isdir(folder_path):
             raise ValueError(f"O caminho informado não é uma pasta válida: {folder_path}")
 
         txt_files = [
             f for f in os.listdir(folder_path)
-            if f.lower().endswith(".txt") and os.path.isfile(os.path.join(folder_path, f))
+            if not f.startswith("~$")
+            and f.lower().endswith(SUPPORTED_DIARY_EXTENSIONS)
+            and os.path.isfile(os.path.join(folder_path, f))
         ]
         txt_files.sort(key=lambda fname: (parse_date_from_filename(fname) or "", fname.lower()))
 

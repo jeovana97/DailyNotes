@@ -32,6 +32,7 @@ from utils.editor_history import (
     commit_history_before_action,
     record_history_after_action,
 )
+from utils.editor_shortcuts import EditorAssistController
 
 
 def _fit_modal_height(win, parent, width: int, min_height: int, max_height: int = 580):
@@ -708,6 +709,14 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
             btn_overstrike=self.btn_overstrike,
         )
 
+        # Atalhos inteligentes no modo edição: F5 (data/hora atual) e Ctrl+Space (autocompletar/corrigir)
+        self._spell_service = None
+        self.editor_assist = EditorAssistController(
+            self.txt_content,
+            spell_service_getter=self._get_spell_service_lazy,
+            on_change_callback=self._on_text_modified,
+        )
+
         # Tag para destacar termos pesquisados
         try:
             self.txt_content._textbox.tag_configure(
@@ -763,6 +772,15 @@ class DiaryNoteReaderDialog(ctk.CTkToplevel):
         self.bind("<Shift-F3>", lambda e: (self._prev_search_match(), "break")[1])
         self.txt_content._textbox.bind("<F3>", lambda e: (self._next_search_match(), "break")[1])
         self.txt_content._textbox.bind("<Shift-F3>", lambda e: (self._prev_search_match(), "break")[1])
+
+    def _get_spell_service_lazy(self):
+        if self._spell_service is None:
+            try:
+                from services.spellcheck_service import WindowsSpellCheckService
+                self._spell_service = WindowsSpellCheckService(db_path=self.diary_service.db_path)
+            except Exception:
+                self._spell_service = None
+        return self._spell_service
 
     def _update_meta_and_counts(self, current_text: str):
         words = len(current_text.split()) if current_text.strip() else 0

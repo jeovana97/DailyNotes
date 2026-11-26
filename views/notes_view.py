@@ -24,6 +24,7 @@ from utils.editor_history import (
     commit_history_before_action,
     record_history_after_action,
 )
+from utils.editor_shortcuts import EditorAssistController
 from utils.syntax_highlighter import (
     convert_selection_case,
     format_and_highlight_xml,
@@ -982,7 +983,7 @@ class NotesView(ctk.CTkFrame):
         self.btn_import_txt = self.responsive_action_bar.add_button(
             key="import",
             symbol_text="📥 Importar",
-            full_label="📥 Importar Notas (TXT, XML, BAT, SQL)",
+            full_label="📥 Importar Notas (TXT, DOC, DOCX, XML, BAT, SQL)",
             command=self._on_import_notes_clicked,
             width=88,
             height=32,
@@ -1285,6 +1286,14 @@ class NotesView(ctk.CTkFrame):
             btn_italic=self.btn_italic,
             btn_underline=self.btn_underline,
             btn_overstrike=self.btn_overstrike,
+        )
+
+        # Atalhos inteligentes: F5 (data e hora atual) e Ctrl+Space (autocompletar / corrigir ortografia)
+        self.editor_assist = EditorAssistController(
+            self.txt_content,
+            spell_service_getter=lambda: self.spell_service,
+            on_change_callback=self._on_field_modified,
+            on_after_spell_change=self._run_spellcheck,
         )
 
         # 2.4 Barra de Status Inferior
@@ -2277,7 +2286,11 @@ class NotesView(ctk.CTkFrame):
             return
 
         supported_types = [
-            ("Formatos Suportados (*.txt;*.xml;*.bat;*.sql)", "*.txt;*.xml;*.bat;*.sql;*.TXT;*.XML;*.BAT;*.SQL"),
+            (
+                "Formatos Suportados (*.txt;*.doc;*.docx;*.xml;*.bat;*.sql)",
+                "*.txt;*.doc;*.docx;*.xml;*.bat;*.sql;*.TXT;*.DOC;*.DOCX;*.XML;*.BAT;*.SQL",
+            ),
+            ("Documentos do Word (*.doc;*.docx)", "*.doc;*.docx;*.DOC;*.DOCX"),
             ("Arquivos de Texto (*.txt)", "*.txt;*.TXT"),
             ("Arquivos XML (*.xml)", "*.xml;*.XML"),
             ("Arquivos Batch / BAT (*.bat)", "*.bat;*.BAT"),
@@ -2287,7 +2300,7 @@ class NotesView(ctk.CTkFrame):
 
         file_paths = filedialog.askopenfilenames(
             parent=self,
-            title="Selecione o(s) arquivo(s) para importar como Nota(s) (TXT, XML, BAT, SQL)",
+            title="Selecione o(s) arquivo(s) para importar como Nota(s) (TXT, DOC, DOCX, XML, BAT, SQL)",
             filetypes=supported_types,
         )
         if not file_paths:

@@ -10,6 +10,7 @@ if BASE_DIR not in sys.path:
 import config
 from database.migrations import init_db
 from services.schedule_service import ScheduleService
+from services.task_reminder_service import TaskReminderService
 from utils.notification_utils import (
     ensure_app_user_model_id,
     parse_toast_protocol_url,
@@ -74,6 +75,7 @@ def main():
         if toast_cmd is not None:
             action = toast_cmd.get("action")
             sched_id = toast_cmd.get("schedule_id")
+            task_id = toast_cmd.get("task_id")
             if action == "snooze":
                 minutes = toast_cmd.get("minutes", 10)
                 if sched_id is not None:
@@ -82,6 +84,20 @@ def main():
                     {"action": "snooze_refresh", "schedule_id": sched_id, "minutes": minutes}
                 )
                 return
+            elif action == "snooze_task":
+                minutes = toast_cmd.get("minutes", 10)
+                if task_id is not None:
+                    TaskReminderService(config.DB_PATH).snooze_task_reminder(task_id, minutes=minutes)
+                write_pending_toast_action(
+                    {"action": "snooze_refresh", "task_id": task_id, "minutes": minutes}
+                )
+                return
+            elif action == "open_task":
+                write_pending_toast_action(
+                    {"action": "open_task", "task_id": task_id, "schedule_id": task_id}
+                )
+                if already_running:
+                    return
             elif action == "open":
                 write_pending_toast_action(
                     {"action": "open_schedule", "schedule_id": sched_id}

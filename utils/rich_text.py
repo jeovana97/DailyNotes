@@ -5,6 +5,7 @@ Suporta:
 - Negrito (bold), Itálico (italic), Sublinhado (underline) e Riscado (overstrike) — combináveis entre si
 - Digitação contínua com estilos ativos quando não há seleção
 - Escala de fonte em pixels negativos idêntica ao CustomTkinter (evita mudança de tamanho ao ativar Negrito/Itálico)
+- Recálculo de fontes compostas por algoritmo sweep-line de intervalos (O(K log K) em vez de O(N) por caractere)
 - Integração com EditorHistoryManager para Desfazer (Ctrl+Z) e Refazer (Ctrl+Y)
 - Serialização e restauração em JSON (formatting_json), mantendo o texto puro intacto no SQLite
 """
@@ -50,6 +51,18 @@ TAG_SIZE_PREFIX = "rt_size::"
 TAG_COMP_PREFIX = "rt_comp::"
 
 
+def _idx_to_tuple(idx_str: str) -> Tuple[int, int]:
+    """Converte índice Tkinter 'linha.coluna' para tupla comparável (linha, coluna) em Python puro."""
+    dot = idx_str.find(".")
+    if dot == -1:
+        return (1, 0)
+    return (int(idx_str[:dot]), int(idx_str[dot + 1:]))
+
+
+def _tuple_to_idx(pos: Tuple[int, int]) -> str:
+    return f"{pos[0]}.{pos[1]}"
+
+
 class RichTextController:
     """
     Controlador de formatação rica acoplado a um CTkTextbox.
@@ -72,9 +85,11 @@ class RichTextController:
         self.ctk_textbox._rich_text = self
 
         self.default_family = default_family
-        self.default_size = default_size
+        self.default_size = int(default_size)
         self.base_family = default_family
-        self.base_size = default_size
+        self.base_size = int(default_size)
+        # Guarda a última fonte base aplicada no widget para evitar reflows redundantes
+        self._applied_base_font: Tuple[str, int] = (default_family, int(default_size))
 
         # Estados de digitação quando não há texto selecionado
         self.typing_bold = False
@@ -91,8 +106,10 @@ class RichTextController:
         self._btn_overstrike: Optional[ctk.CTkButton] = None
 
         self._font_cache: Dict[Tuple[str, int, bool, bool, float], tkfont.Font] = {}
+        self._configured_comp_tags: Dict[str, Tuple[str, int, bool, bool, float]] = {}
         self._pre_key_index: Optional[str] = None
         self._suppress_sync = False
+        self._last_btn_states: Dict[int, bool] = {}
 
         self._setup_static_tags()
         try:
@@ -118,6 +135,7 @@ class RichTextController:
         self._btn_italic = btn_italic
         self._btn_underline = btn_underline
         self._btn_overstrike = btn_overstrike
+        self._last_btn_states.clear()
         self.sync_toolbar_state()
 
     def _setup_static_tags(self):
@@ -167,11 +185,15 @@ class RichTextController:
             )
         return self._font_cache[key]
 
-    def _apply_base_font(self):
+    def _apply_base_font(self, force: bool = False):
+        target = (self.base_family, int(self.base_size))
+        if not force and self._applied_base_font == target:
+            return
         try:
             self.ctk_textbox.configure(
                 font=ctk.CTkFont(family=self.base_family, size=int(self.base_size))
             )
+            self._applied_base_font = target
         except Exception:
             pass
 
@@ -191,94 +213,165 @@ class RichTextController:
         return None
 
     def _range_fully_has_tag(self, tag_name: str, start: str, end: str) -> bool:
-        """Verifica se TODOS os caracteres no intervalo [start, end) possuem tag_name."""
-        cur = self.tb.index(start)
-        end_idx = self.tb.index(end)
-        if self.tb.compare(cur, ">=", end_idx):
+        """
+        Verifica em O(K) usando tag_ranges se TODOS os caracteres em [start, end)
+        possuem `tag_name`, evitando percorrer caractere por caractere no Tcl/Tk.
+        """
+        s_pos = _idx_to_tuple(self.tb.index(start))
+        e_pos = _idx_to_tuple(self.tb.index(end))
+        if s_pos >= e_pos:
             return False
-        while self.tb.compare(cur, "<", end_idx):
-            if tag_name not in self.tb.tag_names(cur):
+
+        ranges = self.tb.tag_ranges(tag_name)
+        if not ranges:
+            return False
+
+        # Como o tk.Text mescla automaticamente intervalos adjacentes da mesma tag,
+        # basta verificar se algum intervalo [rs, re) cobre completamente [s_pos, e_pos)
+        for i in range(0, len(ranges), 2):
+            rs = _idx_to_tuple(str(ranges[i]))
+            re_ = _idx_to_tuple(str(ranges[i + 1]))
+            if rs <= s_pos and re_ >= e_pos:
+                return True
+            if rs > s_pos:
                 return False
-            cur = self.tb.index(f"{cur} + 1c")
-        return True
+        return False
 
     def _clear_prefix_tags_in_range(self, prefix: str, start: str, end: str):
-        for tag in list(self.tb.tag_names()):
+        for tag in self.tb.tag_names():
             if tag.startswith(prefix):
                 self.tb.tag_remove(tag, start, end)
 
     def _recompute_composite_fonts(self, start: str, end: str):
         """
         Recalcula as tags compostas de fonte (family + size + bold + italic) no intervalo [start, end)
-        agrupando caracteres contíguos com a mesma combinação em runs eficientes.
+        usando algoritmo sweep-line sobre os intervalos retornados por `tag_ranges`.
+        Complexidade O(K log K) no número de trechos formatados — independente do tamanho do texto!
         """
         s_idx = self.tb.index(start)
         e_idx = self.tb.index(end)
-        if self.tb.compare(s_idx, ">=", e_idx):
+        s_pos = _idx_to_tuple(s_idx)
+        e_pos = _idx_to_tuple(e_idx)
+        if s_pos >= e_pos:
             return
 
         # Remove tags compostas antigas neste intervalo
-        self._clear_prefix_tags_in_range(TAG_COMP_PREFIX, s_idx, e_idx)
-
-        # Verifica se há alguma tag de fonte/tamanho/negrito/itálico no texto antes de iterar
         all_tags = self.tb.tag_names()
-        has_any_font_tag = any(
-            t in (TAG_BOLD, TAG_ITALIC)
-            or t.startswith(TAG_FAMILY_PREFIX)
-            or t.startswith(TAG_SIZE_PREFIX)
-            for t in all_tags
-        )
-        if not has_any_font_tag:
+        for tag in all_tags:
+            if tag.startswith(TAG_COMP_PREFIX):
+                self.tb.tag_remove(tag, s_idx, e_idx)
+
+        # Identifica apenas tags de fonte/tamanho/negrito/itálico existentes no widget
+        font_tags: List[Tuple[str, str, Any]] = []
+        for t in all_tags:
+            if t == TAG_BOLD:
+                font_tags.append((t, "bold", True))
+            elif t == TAG_ITALIC:
+                font_tags.append((t, "italic", True))
+            elif t.startswith(TAG_FAMILY_PREFIX):
+                font_tags.append((t, "family", t[len(TAG_FAMILY_PREFIX):]))
+            elif t.startswith(TAG_SIZE_PREFIX):
+                try:
+                    font_tags.append((t, "size", int(t[len(TAG_SIZE_PREFIX):])))
+                except ValueError:
+                    pass
+
+        if not font_tags:
             return
 
-        cur = s_idx
-        run_start = cur
-        prev_key: Optional[Tuple[str, int, bool, bool]] = None
+        # Coleta apenas intervalos que interceptam [s_pos, e_pos)
+        # Eventos: (pos, delta (+1 entra / -1 sai), kind, value)
+        events: List[Tuple[Tuple[int, int], int, str, Any]] = []
+        for tag_name, kind, val in font_tags:
+            ranges = self.tb.tag_ranges(tag_name)
+            for i in range(0, len(ranges), 2):
+                rs = _idx_to_tuple(str(ranges[i]))
+                re_ = _idx_to_tuple(str(ranges[i + 1]))
+                if re_ <= s_pos:
+                    continue
+                if rs >= e_pos:
+                    break
+                clamped_s = rs if rs > s_pos else s_pos
+                clamped_e = re_ if re_ < e_pos else e_pos
+                if clamped_s < clamped_e:
+                    events.append((clamped_s, 1, kind, val))
+                    events.append((clamped_e, -1, kind, val))
 
-        def _flush_run(r_start: str, r_end: str, f_key: Optional[Tuple[str, int, bool, bool]]):
-            if f_key is None:
-                return
-            fam, sz, bld, itl = f_key
-            # Se coincide exatamente com a fonte base normal, não precisa de tag composta
-            if fam == self.base_family and sz == self.base_size and not bld and not itl:
-                return
+        if not events:
+            return
+
+        events.sort(key=lambda ev: ev[0])
+
+        bold_cnt = 0
+        italic_cnt = 0
+        family_stack: List[str] = []
+        size_stack: List[int] = []
+
+        # Agrupa todos os segmentos por tag composta para aplicar em lote (1 tag_add por estilo)
+        comp_batches: Dict[Tuple[str, int, bool, bool], List[str]] = {}
+
+        idx_ev = 0
+        n_ev = len(events)
+        prev_pos = events[0][0]
+
+        while idx_ev < n_ev:
+            cur_pos = events[idx_ev][0]
+            if cur_pos > prev_pos:
+                fam = family_stack[-1] if family_stack else self.base_family
+                sz = size_stack[-1] if size_stack else self.base_size
+                bld = bold_cnt > 0
+                itl = italic_cnt > 0
+                if not (fam == self.base_family and sz == self.base_size and not bld and not itl):
+                    key = (fam, sz, bld, itl)
+                    batch = comp_batches.get(key)
+                    if batch is None:
+                        batch = []
+                        comp_batches[key] = batch
+                    batch.append(_tuple_to_idx(prev_pos))
+                    batch.append(_tuple_to_idx(cur_pos))
+
+            # Processa todos os eventos que ocorrem exatamente em cur_pos
+            while idx_ev < n_ev and events[idx_ev][0] == cur_pos:
+                _, delta, kind, val = events[idx_ev]
+                if kind == "bold":
+                    bold_cnt += delta
+                elif kind == "italic":
+                    italic_cnt += delta
+                elif kind == "family":
+                    if delta > 0:
+                        family_stack.append(val)
+                    else:
+                        try:
+                            family_stack.remove(val)
+                        except ValueError:
+                            pass
+                elif kind == "size":
+                    if delta > 0:
+                        size_stack.append(val)
+                    else:
+                        try:
+                            size_stack.remove(val)
+                        except ValueError:
+                            pass
+                idx_ev += 1
+
+            prev_pos = cur_pos
+
+        if not comp_batches:
+            return
+
+        scaling = round(self._get_widget_scaling(), 3)
+        for (fam, sz, bld, itl), flat_indices in comp_batches.items():
             comp_tag = f"{TAG_COMP_PREFIX}{fam}::{sz}::{1 if bld else 0}::{1 if itl else 0}"
-            self.tb.tag_configure(comp_tag, font=self._get_tk_font(fam, sz, bld, itl))
-            self.tb.tag_add(comp_tag, r_start, r_end)
+            font_sig = (fam, sz, bld, itl, scaling)
+            if self._configured_comp_tags.get(comp_tag) != font_sig:
+                self.tb.tag_configure(comp_tag, font=self._get_tk_font(fam, sz, bld, itl))
+                self._configured_comp_tags[comp_tag] = font_sig
+            self.tb.tag_add(comp_tag, *flat_indices)
             try:
                 self.tb.tag_raise(comp_tag)
             except Exception:
                 pass
-
-        while self.tb.compare(cur, "<", e_idx):
-            tags_here = self.tb.tag_names(cur)
-            fam = self.base_family
-            sz = self.base_size
-            bld = False
-            itl = False
-            for t in tags_here:
-                if t == TAG_BOLD:
-                    bld = True
-                elif t == TAG_ITALIC:
-                    itl = True
-                elif t.startswith(TAG_FAMILY_PREFIX):
-                    fam = t[len(TAG_FAMILY_PREFIX):]
-                elif t.startswith(TAG_SIZE_PREFIX):
-                    try:
-                        sz = int(t[len(TAG_SIZE_PREFIX):])
-                    except ValueError:
-                        pass
-            key = (fam, sz, bld, itl)
-            if prev_key is None:
-                prev_key = key
-                run_start = cur
-            elif key != prev_key:
-                _flush_run(run_start, cur, prev_key)
-                prev_key = key
-                run_start = cur
-            cur = self.tb.index(f"{cur} + 1c")
-
-        _flush_run(run_start, e_idx, prev_key)
 
         # Garante sublinhado e riscado acima de sintaxe, e busca/seleção sempre no topo
         for tag in (TAG_UNDERLINE, TAG_OVERSTRIKE, "search_highlight", "search_highlight_current", "sel"):
@@ -412,7 +505,13 @@ class RichTextController:
             self._pre_key_index = None
             try:
                 post = self.tb.index("insert")
-                if self.tb.compare(pre, "<", post):
+                if _idx_to_tuple(pre) < _idx_to_tuple(post):
+                    any_active = (
+                        self.typing_bold
+                        or self.typing_italic
+                        or self.typing_underline
+                        or self.typing_overstrike
+                    )
                     if self.typing_bold:
                         self.tb.tag_add(TAG_BOLD, pre, post)
                     else:
@@ -433,9 +532,12 @@ class RichTextController:
                     else:
                         self.tb.tag_remove(TAG_OVERSTRIKE, pre, post)
 
-                    # Sempre recalcula o intervalo digitado (1 char) para também limpar
-                    # tags compostas herdadas quando o usuário desativa negrito/itálico
-                    self._recompute_composite_fonts(pre, post)
+                    # Só recalcula se houver estilo ativo ou tag composta herdada no caractere digitado
+                    if any_active or any(
+                        t.startswith((TAG_COMP_PREFIX, TAG_FAMILY_PREFIX, TAG_SIZE_PREFIX))
+                        for t in self.tb.tag_names(pre)
+                    ):
+                        self._recompute_composite_fonts(pre, post)
             except Exception:
                 pass
         elif event.keysym in ("Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next"):
@@ -492,6 +594,9 @@ class RichTextController:
         for btn, active in mapping:
             if btn is None:
                 continue
+            bid = id(btn)
+            if self._last_btn_states.get(bid) == active:
+                continue
             try:
                 if not btn.winfo_exists():
                     continue
@@ -505,6 +610,7 @@ class RichTextController:
                         fg_color=config.COLORS["card_dark"],
                         text_color=config.COLORS["button_text"],
                     )
+                self._last_btn_states[bid] = active
             except Exception:
                 pass
 
@@ -529,7 +635,7 @@ class RichTextController:
         self.typing_overstrike = False
 
         try:
-            for tag in list(self.tb.tag_names()):
+            for tag in self.tb.tag_names():
                 if tag in (TAG_BOLD, TAG_ITALIC, TAG_UNDERLINE, TAG_OVERSTRIKE) or tag.startswith(
                     (TAG_FAMILY_PREFIX, TAG_SIZE_PREFIX, TAG_COMP_PREFIX)
                 ):
@@ -569,7 +675,7 @@ class RichTextController:
                 for i in range(0, len(ranges), 2):
                     s = str(ranges[i])
                     e = str(ranges[i + 1])
-                    if self.tb.compare(s, "<", e):
+                    if _idx_to_tuple(s) < _idx_to_tuple(e):
                         spans.append({"tag": logical_name, "start": s, "end": e})
         except Exception:
             pass
@@ -592,12 +698,27 @@ class RichTextController:
         """Restaura a formatação rica salva em JSON sobre o texto já carregado no editor."""
         self._suppress_sync = True
         try:
-            self.reset()
+            self.base_family = self.default_family
+            self.base_size = self.default_size
+            self.typing_bold = False
+            self.typing_italic = False
+            self.typing_underline = False
+            self.typing_overstrike = False
+
+            # Limpa apenas tags de formatação existentes
+            for tag in self.tb.tag_names():
+                if tag in (TAG_BOLD, TAG_ITALIC, TAG_UNDERLINE, TAG_OVERSTRIKE) or tag.startswith(
+                    (TAG_FAMILY_PREFIX, TAG_SIZE_PREFIX, TAG_COMP_PREFIX)
+                ):
+                    self.tb.tag_remove(tag, "1.0", "end")
+
             if not formatting_json or not str(formatting_json).strip():
+                self._apply_base_font()
                 return
 
             data = json.loads(formatting_json)
             if not isinstance(data, dict):
+                self._apply_base_font()
                 return
 
             fam = data.get("font_family")
@@ -613,6 +734,8 @@ class RichTextController:
 
             self._apply_base_font()
 
+            # Agrupa spans por tag para aplicar em lote (muito mais rápido em documentos grandes)
+            batches: Dict[str, List[str]] = {}
             for sp in data.get("spans", []):
                 if not isinstance(sp, dict):
                     continue
@@ -621,24 +744,33 @@ class RichTextController:
                 e = sp.get("end")
                 if not t_logical or not s or not e:
                     continue
+                tk_tag: Optional[str] = None
                 if t_logical == "bold":
-                    self.tb.tag_add(TAG_BOLD, s, e)
+                    tk_tag = TAG_BOLD
                 elif t_logical == "italic":
-                    self.tb.tag_add(TAG_ITALIC, s, e)
+                    tk_tag = TAG_ITALIC
                 elif t_logical == "underline":
-                    self.tb.tag_add(TAG_UNDERLINE, s, e)
+                    tk_tag = TAG_UNDERLINE
                 elif t_logical == "overstrike":
-                    self.tb.tag_add(TAG_OVERSTRIKE, s, e)
+                    tk_tag = TAG_OVERSTRIKE
                 elif t_logical.startswith("family:"):
                     f_name = t_logical.split(":", 1)[1].strip()
                     if f_name:
-                        self.tb.tag_add(f"{TAG_FAMILY_PREFIX}{f_name}", s, e)
+                        tk_tag = f"{TAG_FAMILY_PREFIX}{f_name}"
                 elif t_logical.startswith("size:"):
                     sz_str = t_logical.split(":", 1)[1].strip()
                     if sz_str.isdigit():
-                        self.tb.tag_add(f"{TAG_SIZE_PREFIX}{sz_str}", s, e)
+                        tk_tag = f"{TAG_SIZE_PREFIX}{sz_str}"
 
-            self._recompute_composite_fonts("1.0", "end-1c")
+                if tk_tag:
+                    batches.setdefault(tk_tag, []).extend((str(s), str(e)))
+
+            for tk_tag, flat_indices in batches.items():
+                if flat_indices:
+                    self.tb.tag_add(tk_tag, *flat_indices)
+
+            if batches:
+                self._recompute_composite_fonts("1.0", "end-1c")
         except Exception:
             pass
         finally:

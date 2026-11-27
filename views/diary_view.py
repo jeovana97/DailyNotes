@@ -33,11 +33,15 @@ from utils.editor_history import (
 from utils.editor_shortcuts import EditorAssistController
 from services.spellcheck_service import WindowsSpellCheckService, SpellingError
 from utils.syntax_highlighter import (
+    ALL_SYNTAX_TAGS,
+    OffsetMapper,
+    _apply_tag_batches,
     convert_selection_case,
     format_and_highlight_xml,
     format_and_highlight_sql,
     clear_syntax_tags,
     auto_highlight_content,
+    auto_highlight_range,
     configure_syntax_tags,
     enable_undo_redo,
     perform_undo,
@@ -88,23 +92,47 @@ class DiaryView(ctk.CTkFrame):
         self.has_unsaved_changes = False
         self.autosave_timer_id = None
         self.autosave_enabled = tk.BooleanVar(value=True)
+        self._counts_timer_id = None
 
-        # Controle do corretor ortográfico nativo do Windows
+        # Controle do corretor ortográfico nativo do Windows (assíncrono sem travar a UI)
         self.spellcheck_timer_id = None
+        self._spellcheck_gen = 0
+        self._spell_tag_mode: Optional[str] = None
         self.spellcheck_enabled = tk.BooleanVar(value=self.spell_service.is_available)
 
         self._build_ui()
         self._load_entry_for_current_date()
 
-        # Vincula atalho Ctrl+S na caixa de texto e na janela
+        # Vincula atalho Ctrl+S na caixa de texto e na janela (somente quando a tela está visível)
         self.txt_content.bind("<Control-s>", lambda e: (self.save_current_entry(), "break")[1])
         self.txt_content.bind("<Control-S>", lambda e: (self.save_current_entry(), "break")[1])
         try:
             top = self.winfo_toplevel()
-            top.bind("<Control-s>", lambda e: (self.save_current_entry(), "break")[1])
-            top.bind("<Control-S>", lambda e: (self.save_current_entry(), "break")[1])
+            top.bind("<Control-s>", self._on_toplevel_ctrl_s)
+            top.bind("<Control-S>", self._on_toplevel_ctrl_s)
         except Exception:
             pass
+
+    def _on_toplevel_ctrl_s(self, _event=None):
+        try:
+            if self.winfo_exists() and self.winfo_ismapped():
+                self.save_current_entry()
+                return "break"
+        except Exception:
+            pass
+        return None
+
+    def pause_background_tasks(self):
+        """Suspende timers secundários quando o Diário é ocultado no cache de navegação."""
+        self._spellcheck_gen += 1
+        for attr in ("spellcheck_timer_id", "_counts_timer_id"):
+            tid = getattr(self, attr, None)
+            if tid is not None:
+                try:
+                    self.after_cancel(tid)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
 
     def _build_ui(self):
         # 1. Barra Superior com Navegação de Data e Usuário
@@ -625,37 +653,69 @@ class DiaryView(ctk.CTkFrame):
         self.lbl_current_date.configure(text=long_date)
 
     def _load_entry_for_current_date(self):
-        """Carrega a anotação para a data selecionada no editor."""
+        """Carrega a anotação para a data selecionada no editor com mínima latência."""
         self._update_date_header()
 
-        # Cancela qualquer timer de autosave anterior
+        # Cancela timers pendentes da data anterior e invalida qualquer spellcheck em voo
+        self._spellcheck_gen += 1
         if self.autosave_timer_id:
-            self.after_cancel(self.autosave_timer_id)
+            try:
+                self.after_cancel(self.autosave_timer_id)
+            except Exception:
+                pass
             self.autosave_timer_id = None
+        if self.spellcheck_timer_id:
+            try:
+                self.after_cancel(self.spellcheck_timer_id)
+            except Exception:
+                pass
+            self.spellcheck_timer_id = None
+        if self._counts_timer_id:
+            try:
+                self.after_cancel(self._counts_timer_id)
+            except Exception:
+                pass
+            self._counts_timer_id = None
 
         self.active_entry = self.diary_service.get_or_create_entry(
             self.target_user.id, self.current_date_iso
         )
 
         content = self.active_entry.content or ""
-        self.txt_content.delete("1.0", "end")
-        self.txt_content.insert("1.0", content)
-        auto_highlight_content(self.txt_content)
+        tb = self.txt_content._textbox
+        try:
+            tb.configure(undo=False)
+        except Exception:
+            pass
+        tb.delete("1.0", "end")
+        if content:
+            tb.insert("1.0", content)
+        clear_syntax_tags(tb, "1.0", "end")
+        self._clear_spelling_tags()
+        if content:
+            auto_highlight_content(self.txt_content, content=content)
         if hasattr(self, "rich_text"):
             self.rich_text.load(getattr(self.active_entry, "formatting_json", ""))
+        try:
+            tb.configure(undo=True)
+        except Exception:
+            pass
         reset_undo_stack(self.txt_content)
 
         self.has_unsaved_changes = False
         self._update_status_indicator(saved=True, timestamp=self.active_entry.updated_at)
-        self._update_counts()
-        self._schedule_spellcheck()
+        self._update_counts(text=content)
+        self._schedule_spellcheck(delay_ms=350)
 
         # Quando já há conteúdo registrado, posiciona o cursor e rolagem no final do texto
         if content:
-            tb = self.txt_content._textbox
             tb.mark_set("insert", "end-1c")
             tb.see("end-1c")
             self.after(40, self._scroll_to_end_on_load)
+
+    def reload_on_reopen(self):
+        """Recarrega a nota atual ao reexibir o Diário em cache, garantindo cursor no final."""
+        self._load_entry_for_current_date()
 
     def _scroll_to_end_on_load(self):
         """Posiciona o cursor no final do texto e rola a visão após o carregamento da tela."""
@@ -669,23 +729,76 @@ class DiaryView(ctk.CTkFrame):
         except Exception:
             pass
 
-    def _update_counts(self):
-        text = self.txt_content.get("1.0", "end-1c")
+    def _update_counts(self, text: Optional[str] = None):
+        if text is None:
+            text = self.txt_content.get("1.0", "end-1c")
         chars = len(text)
         words = len(text.split()) if text.strip() else 0
         self.lbl_word_count.configure(text=f"{words} palavras | {chars:,} caracteres")
 
+    def _schedule_counts_update(self):
+        if self._counts_timer_id is not None:
+            return
+        try:
+            if self.winfo_exists():
+                self._counts_timer_id = self.after(140, self._run_deferred_counts)
+        except Exception:
+            self._counts_timer_id = None
+
+    def _run_deferred_counts(self):
+        self._counts_timer_id = None
+        try:
+            if self.winfo_exists() and self.txt_content.winfo_exists():
+                self._update_counts()
+        except Exception:
+            pass
+
+    _NAV_ONLY_KEYSYMS = frozenset({
+        "Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next",
+        "Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R",
+        "Caps_Lock", "Num_Lock", "Scroll_Lock", "Escape", "Insert",
+        "Win_L", "Win_R", "Super_L", "Super_R", "Menu",
+        "F1", "F2", "F3", "F4", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    })
+
     def _on_text_modified(self, event=None):
-        """Detecta digitação e agenda o salvamento automático se habilitado."""
-        self._update_counts()
+        """Detecta digitação e agenda o salvamento automático e corretor sem bloquear a digitação."""
+        # Ignora teclas puramente de navegação/modificadores que não alteram o conteúdo
+        if event is not None:
+            keysym = getattr(event, "keysym", "")
+            if keysym in self._NAV_ONLY_KEYSYMS:
+                return
+            # Ignora combinações com Ctrl (Ctrl+C, Ctrl+A, etc.; Ctrl+V/Z/Y/B/I/U/Space chamam explicitamente)
+            if (getattr(event, "state", 0) & 0x4) and keysym not in ("BackSpace", "Delete"):
+                return
+
         self._schedule_spellcheck()
 
-        current_text = self.txt_content.get("1.0", "end-1c")
-        original_text = self.active_entry.content if self.active_entry else ""
-        current_fmt = self.rich_text.serialize() if hasattr(self, "rich_text") else ""
-        original_fmt = (getattr(self.active_entry, "formatting_json", "") or "") if self.active_entry else ""
+        # Caminho rápido durante digitação contínua quando já sabemos que há alterações não salvas
+        if event is not None and self.has_unsaved_changes:
+            self._schedule_counts_update()
+            if self.autosave_enabled.get():
+                if self.autosave_timer_id:
+                    try:
+                        self.after_cancel(self.autosave_timer_id)
+                    except Exception:
+                        pass
+                self.autosave_timer_id = self.after(
+                    config.AUTOSAVE_DELAY_SECONDS * 1000, self._handle_autosave
+                )
+            return
 
-        if current_text != original_text or current_fmt != original_fmt:
+        current_text = self.txt_content.get("1.0", "end-1c")
+        self._update_counts(text=current_text)
+
+        original_text = self.active_entry.content if self.active_entry else ""
+        changed = (current_text != original_text)
+        if not changed and hasattr(self, "rich_text"):
+            current_fmt = self.rich_text.serialize()
+            original_fmt = (getattr(self.active_entry, "formatting_json", "") or "") if self.active_entry else ""
+            changed = (current_fmt != original_fmt)
+
+        if changed:
             if not self.has_unsaved_changes:
                 self.has_unsaved_changes = True
                 self._update_status_indicator(saved=False)
@@ -693,7 +806,10 @@ class DiaryView(ctk.CTkFrame):
             # Agenda autosave se habilitado
             if self.autosave_enabled.get():
                 if self.autosave_timer_id:
-                    self.after_cancel(self.autosave_timer_id)
+                    try:
+                        self.after_cancel(self.autosave_timer_id)
+                    except Exception:
+                        pass
                 self.autosave_timer_id = self.after(
                     config.AUTOSAVE_DELAY_SECONDS * 1000, self._handle_autosave
                 )
@@ -733,11 +849,12 @@ class DiaryView(ctk.CTkFrame):
 
         content = self.txt_content.get("1.0", "end-1c")
         try:
-            self.lbl_save_status.configure(
-                text="🟡 Salvando...",
-                text_color=config.COLORS["warning"],
-            )
-            self.update_idletasks()
+            if not silent:
+                self.lbl_save_status.configure(
+                    text="🟡 Salvando...",
+                    text_color=config.COLORS["warning"],
+                )
+                self.update_idletasks()
 
             fmt_json = self.rich_text.serialize() if hasattr(self, "rich_text") else ""
             saved_entry = self.diary_service.save_entry(
@@ -880,9 +997,11 @@ class DiaryView(ctk.CTkFrame):
     # =========================================================================
 
     def _configure_spellcheck_tags(self):
-        """Configura a tag visual para realce de palavras com erros ortográficos."""
+        """Configura a tag visual para realce de palavras com erros ortográficos (com cache de tema)."""
         try:
             mode = ctk.get_appearance_mode()
+            if self._spell_tag_mode == mode:
+                return
             is_dark = (mode == "Dark")
             danger_color = config.COLORS["danger"][1 if is_dark else 0]
             self.txt_content._textbox.tag_configure(
@@ -890,11 +1009,12 @@ class DiaryView(ctk.CTkFrame):
                 underline=True,
                 underlinefg=danger_color,
             )
+            self._spell_tag_mode = mode
         except Exception:
             pass
 
-    def _schedule_spellcheck(self):
-        """Agenda uma verificação ortográfica com debounce para não impactar a digitação."""
+    def _schedule_spellcheck(self, delay_ms: int = 550):
+        """Agenda verificação ortográfica assíncrona com debounce para não travar a digitação ou colagem."""
         if not self.spellcheck_enabled.get() or not self.spell_service.is_available:
             self._clear_spelling_tags()
             return
@@ -905,7 +1025,7 @@ class DiaryView(ctk.CTkFrame):
             except Exception:
                 pass
 
-        self.spellcheck_timer_id = self.after(400, self._run_spellcheck)
+        self.spellcheck_timer_id = self.after(delay_ms, self._start_async_spellcheck)
 
     def _clear_spelling_tags(self):
         """Remove todas as marcações de erros ortográficos da área de texto."""
@@ -914,8 +1034,8 @@ class DiaryView(ctk.CTkFrame):
         except Exception:
             pass
 
-    def _run_spellcheck(self):
-        """Executa a verificação ortográfica nativa do Windows no conteúdo atual."""
+    def _start_async_spellcheck(self):
+        """Envia o texto atual para o worker COM em segundo plano sem bloquear a UI."""
         self.spellcheck_timer_id = None
         try:
             if not self.winfo_exists() or not self.txt_content.winfo_exists():
@@ -927,8 +1047,10 @@ class DiaryView(ctk.CTkFrame):
             self._clear_spelling_tags()
             return
 
-        self._configure_spellcheck_tags()
         text = self.txt_content.get("1.0", "end-1c")
+        self._spellcheck_gen += 1
+        gen = self._spellcheck_gen
+
         if not text or not text.strip():
             self._clear_spelling_tags()
             lang = self.spell_service.active_language or "pt-BR"
@@ -938,22 +1060,60 @@ class DiaryView(ctk.CTkFrame):
             )
             return
 
-        errors = self.spell_service.check_text(text)
+        if hasattr(self.spell_service, "check_text_async"):
+            def _on_worker_done(_req_id: int, errors: List[SpellingError]):
+                try:
+                    if self.winfo_exists():
+                        self.after(0, lambda g=gen, t=text, e=errors: self._apply_spellcheck_results(g, t, e))
+                except Exception:
+                    pass
+
+            self.spell_service.check_text_async(text, _on_worker_done)
+        else:
+            errors = self.spell_service.check_text(text)
+            self._apply_spellcheck_results(gen, text, errors)
+
+    def _apply_spellcheck_results(self, gen: int, checked_text: str, errors: List[SpellingError]):
+        """Aplica as marcações ortográficas em lote O(E log L) na thread da UI se o resultado ainda for atual."""
+        try:
+            if gen != self._spellcheck_gen:
+                return
+            if not self.winfo_exists() or not self.txt_content.winfo_exists():
+                return
+            if not self.spellcheck_enabled.get() or not self.spell_service.is_available:
+                self._clear_spelling_tags()
+                return
+        except Exception:
+            return
+
+        self._configure_spellcheck_tags()
+        tb = self.txt_content._textbox
         self._clear_spelling_tags()
 
-        tb = self.txt_content._textbox
         active_errors_count = 0
-        for err in errors:
-            start_idx = f"1.0 + {err.start} chars"
-            end_idx = f"1.0 + {err.start + err.length} chars"
-            try:
-                # Não sublinha palavras que já fazem parte de tags XML ou comandos SQL coloridos
-                if any(t.startswith("syntax_") for t in tb.tag_names(start_idx)):
-                    continue
-                tb.tag_add("spelling_error", start_idx, end_idx)
+        if errors:
+            mapper = OffsetMapper(checked_text, base_line=1, base_col=0)
+
+            # Verifica se há tags de sintaxe ativas no editor (evita chamar tag_names por erro quando não há)
+            existing_tags = set(tb.tag_names())
+            has_syntax_tags = any(t in existing_tags for t in ALL_SYNTAX_TAGS)
+
+            flat_indices: List[str] = []
+            for err in errors:
+                start_idx = mapper.to_tk(err.start)
+                if has_syntax_tags:
+                    try:
+                        if any(t.startswith("syntax_") for t in tb.tag_names(start_idx)):
+                            continue
+                    except Exception:
+                        pass
+                end_idx = mapper.to_tk(err.start + err.length)
+                flat_indices.append(start_idx)
+                flat_indices.append(end_idx)
                 active_errors_count += 1
-            except Exception:
-                pass
+
+            if flat_indices:
+                _apply_tag_batches(tb, {"spelling_error": flat_indices})
 
         lang = self.spell_service.active_language or "pt-BR"
         if active_errors_count == 0:
@@ -968,6 +1128,34 @@ class DiaryView(ctk.CTkFrame):
                 text=f"🔤 {qtd} {sufixo}",
                 text_color=config.COLORS["danger"],
             )
+
+    def _run_spellcheck(self):
+        """Executa a verificação ortográfica imediata (usado em ações diretas e testes)."""
+        self.spellcheck_timer_id = None
+        try:
+            if not self.winfo_exists() or not self.txt_content.winfo_exists():
+                return
+        except Exception:
+            return
+
+        if not self.spellcheck_enabled.get() or not self.spell_service.is_available:
+            self._clear_spelling_tags()
+            return
+
+        text = self.txt_content.get("1.0", "end-1c")
+        self._spellcheck_gen += 1
+        gen = self._spellcheck_gen
+        if not text or not text.strip():
+            self._clear_spelling_tags()
+            lang = self.spell_service.active_language or "pt-BR"
+            self.btn_spell_status.configure(
+                text=f"🔤 Ortografia: {lang}",
+                text_color=config.COLORS["text_muted"],
+            )
+            return
+
+        errors = self.spell_service.check_text(text)
+        self._apply_spellcheck_results(gen, text, errors)
 
     def _toggle_spellcheck(self):
         """Alterna a ativação do corretor ortográfico."""
@@ -1215,9 +1403,10 @@ class DiaryView(ctk.CTkFrame):
 
     def _on_paste(self, event=None):
         """
-        Trata a colagem de texto no Diário do Dia garantindo que o cursor vá para
-        o final do texto colado (e não para o final do arquivo), role a visualização
-        para exibir o fim da cópia e registre separador de Undo para Ctrl+Z.
+        Trata a colagem de texto no Diário do Dia com alta performance:
+        - Calcula o índice final em Python puro O(1) (sem travessia O(N) no Tcl/Tk)
+        - Destaca sintaxe apenas nas linhas afetadas pela colagem (sem recolorir todo o arquivo)
+        - Mantém o cursor no final da cópia e registra separador no histórico de Desfazer (Ctrl+Z).
         """
         text_widget = self.txt_content._textbox
         try:
@@ -1227,6 +1416,10 @@ class DiaryView(ctk.CTkFrame):
 
         if not clipboard_text:
             return "break"
+
+        # Normaliza quebras de linha CRLF/CR do Windows para cálculo exato de linha.coluna
+        if "\r" in clipboard_text:
+            clipboard_text = clipboard_text.replace("\r\n", "\n").replace("\r", "\n")
 
         commit_history_before_action(self.txt_content)
         try:
@@ -1238,10 +1431,22 @@ class DiaryView(ctk.CTkFrame):
         if text_widget.tag_ranges("sel"):
             text_widget.delete("sel.first", "sel.last")
 
-        # Insere o texto colado na posição atual do cursor e posiciona o cursor ao final da cópia
+        # Insere o texto colado na posição atual do cursor e calcula o fim em Python puro
         start_pos = text_widget.index("insert")
+        s_line_str, s_col_str = start_pos.split(".")
+        s_line, s_col = int(s_line_str), int(s_col_str)
+
         text_widget.insert(start_pos, clipboard_text)
-        pasted_end = text_widget.index(f"{start_pos} + {len(clipboard_text)} chars")
+
+        nl_count = clipboard_text.count("\n")
+        if nl_count == 0:
+            end_line = s_line
+            end_col = s_col + len(clipboard_text)
+        else:
+            end_line = s_line + nl_count
+            end_col = len(clipboard_text) - clipboard_text.rfind("\n") - 1
+        pasted_end = f"{end_line}.{end_col}"
+
         text_widget.mark_set("insert", pasted_end)
 
         try:
@@ -1249,13 +1454,16 @@ class DiaryView(ctk.CTkFrame):
         except Exception:
             pass
 
-        auto_highlight_content(self.txt_content)
+        # Destaca sintaxe apenas nas linhas afetadas pela colagem (evita travamento em notas longas)
+        auto_highlight_range(
+            self.txt_content,
+            f"{s_line}.0",
+            f"{end_line}.end",
+        )
         record_history_after_action(self.txt_content)
 
-        # Garante que o cursor permaneça no final da cópia e visível na tela
+        # Garante que o cursor permaneça no final da cópia e visível na tela (sem reflow síncrono pesado)
         text_widget.mark_set("insert", pasted_end)
-        text_widget.see(pasted_end)
-        text_widget.update_idletasks()
         text_widget.see(pasted_end)
         text_widget.focus_set()
 
@@ -1312,12 +1520,20 @@ class DiaryView(ctk.CTkFrame):
 
     def destroy(self):
         """Cancela timers pendentes antes de destruir a view."""
+        self._spellcheck_gen += 1
         if self.spellcheck_timer_id is not None:
             try:
                 self.after_cancel(self.spellcheck_timer_id)
             except Exception:
                 pass
             self.spellcheck_timer_id = None
+
+        if self._counts_timer_id is not None:
+            try:
+                self.after_cancel(self._counts_timer_id)
+            except Exception:
+                pass
+            self._counts_timer_id = None
 
         if self.autosave_timer_id is not None:
             try:

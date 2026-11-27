@@ -265,11 +265,12 @@ class ResponsiveToolbar(ctk.CTkFrame):
 
     def _schedule_reflow(self):
         if self._resize_job is not None:
-            try:
-                self.after_cancel(self._resize_job)
-            except Exception:
-                pass
-        self._resize_job = self.after(35, self.reflow)
+            return
+        try:
+            if self.winfo_exists():
+                self._resize_job = self.after(35, self.reflow)
+        except Exception:
+            self._resize_job = None
 
     def reflow(self):
         """Recalcula quais itens cabem na largura atual e posiciona o botão '»'."""

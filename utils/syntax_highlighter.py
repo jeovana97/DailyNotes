@@ -1,7 +1,8 @@
+import bisect
 import re
 import unicodedata
 import tkinter as tk
-from typing import Optional, Tuple, List, Callable
+from typing import Optional, Tuple, List, Callable, Dict
 import customtkinter as ctk
 
 from utils.editor_history import (
@@ -73,10 +74,10 @@ SQL_FUNCTIONS = {
     "DBMS_OUTPUT", "PUT_LINE", "RAISE_APPLICATION_ERROR", "SQLCODE", "SQLERRM",
 }
 
-# Expressões compiladas para performance
+# Expressões compiladas para performance (limites explícitos evitam backtracking em textos longos)
 _RE_XML_COMMENT = re.compile(r"<!--[\s\S]*?-->")
 _RE_XML_CDATA = re.compile(r"<!\[CDATA\[[\s\S]*?\]\]>")
-_RE_XML_TAG = re.compile(r"(<\?xml[\s\S]*?\?>|</?[a-zA-Z_][\w:.\-]*(?:\s+[^<>]*?)?/?>)")
+_RE_XML_TAG = re.compile(r"(<\?xml[\s\S]{0,400}?\?>|</?[a-zA-Z_][\w:.\-]*(?:\s+[^<>]{0,2000}?)?/?>)")
 _RE_XML_TAG_PARTS = re.compile(r"^(<\?|\?|</|<)([a-zA-Z_][\w:.\-]*)(.*?)(\?>|/>|>)$", re.DOTALL)
 _RE_XML_ATTR = re.compile(r'([a-zA-Z_][\w:.\-]*)(\s*=\s*)("[^"]*"|\'[^\']*\')')
 
@@ -86,21 +87,110 @@ _RE_SQL_NUMBER = re.compile(r"\b(\d+(?:\.\d+)?)\b")
 _RE_SQL_WORD = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_$#]*)\b")
 _RE_SQL_OPERATOR = re.compile(r"(:=|<>|!=|<=|>=|\|\|=|\|\||=)")
 
-# Detectores rápidos para realce automático ao abrir notas
-_RE_HAS_XML = re.compile(r"</?[a-zA-Z_][\w:.\-]*(?:\s+[^<>]*?)?>")
+# Detectores rápidos e sem backtracking catastrófico para realce automático ao abrir notas
+_RE_HAS_XML = re.compile(r"</?[a-zA-Z_][\w:.\-]*(?:\s+[^<>]{0,500}?)?>")
 _RE_HAS_SQL = re.compile(
-    r"\b(SELECT\s+[\s\S]+?\bFROM\b|INSERT\s+INTO\b|UPDATE\s+\w+[\s\S]+?\bSET\b|"
+    r"\b(SELECT\b[\s\S]{1,400}?\bFROM\b|INSERT\s+INTO\b|UPDATE\s+\w+[\s\S]{1,250}?\bSET\b|"
     r"DELETE\s+FROM\b|CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|PROCEDURE|FUNCTION|PACKAGE|TRIGGER|INDEX|SEQUENCE)\b|"
     r"ALTER\s+(?:TABLE|VIEW|PROCEDURE|FUNCTION|PACKAGE|TRIGGER|SESSION)\b|"
-    r"BEGIN\b[\s\S]+?\bEND\s*;)",
+    r"BEGIN\b[\s\S]{1,1000}?\bEND\s*;)",
     re.IGNORECASE,
 )
 
 
-def configure_syntax_tags(text_widget: tk.Text) -> None:
-    """Configura as tags de cores de sintaxe (XML e SQL) de acordo com o tema atual (Claro/Escuro)."""
+class OffsetMapper:
+    """
+    Converte offsets de caractere (int) em índices Tkinter 'linha.coluna' em O(log L)
+    em Python puro, eliminando o custo O(N) de `f"1.0 + {offset} chars"` no Tcl/Tk.
+    """
+
+    __slots__ = ("_line_starts", "_base_line", "_base_col")
+
+    def __init__(self, text: str, base_line: int = 1, base_col: int = 0):
+        self._base_line = base_line
+        self._base_col = base_col
+        starts = [0]
+        pos = text.find("\n")
+        while pos != -1:
+            starts.append(pos + 1)
+            pos = text.find("\n", pos + 1)
+        self._line_starts = starts
+
+    @classmethod
+    def from_tk_index(cls, text_widget: tk.Text, start_idx: str, text: str) -> "OffsetMapper":
+        resolved = text_widget.index(start_idx)
+        dot = resolved.find(".")
+        if dot != -1:
+            base_line = int(resolved[:dot])
+            base_col = int(resolved[dot + 1:])
+        else:
+            base_line, base_col = 1, 0
+        return cls(text, base_line=base_line, base_col=base_col)
+
+    def to_tk(self, offset: int) -> str:
+        line_idx = bisect.bisect_right(self._line_starts, offset) - 1
+        if line_idx < 0:
+            line_idx = 0
+        col = offset - self._line_starts[line_idx]
+        if line_idx == 0:
+            col += self._base_col
+        return f"{self._base_line + line_idx}.{col}"
+
+
+class _IntervalIndex:
+    """Índice ordenado de intervalos [start, end) para consulta de pertinência em O(log K)."""
+
+    __slots__ = ("_starts", "_ends")
+
+    def __init__(self, spans: List[Tuple[int, int]]):
+        if not spans:
+            self._starts: List[int] = []
+            self._ends: List[int] = []
+            return
+        ordered = sorted(spans)
+        merged_s: List[int] = [ordered[0][0]]
+        merged_e: List[int] = [ordered[0][1]]
+        for s, e in ordered[1:]:
+            if s <= merged_e[-1]:
+                if e > merged_e[-1]:
+                    merged_e[-1] = e
+            else:
+                merged_s.append(s)
+                merged_e.append(e)
+        self._starts = merged_s
+        self._ends = merged_e
+
+    def contains(self, pos: int) -> bool:
+        if not self._starts:
+            return False
+        idx = bisect.bisect_right(self._starts, pos) - 1
+        return idx >= 0 and pos < self._ends[idx]
+
+
+def _apply_tag_batches(text_widget: tk.Text, batches: Dict[str, List[str]]) -> None:
+    """Aplica todas as tags coletadas usando chamadas em lote `tag_add(tag, s1, e1, s2, e2, ...)`."""
+    CHUNK = 2000  # 1000 pares por chamada Tcl segura contra limite de argumentos
+    for tag_name, flat_indices in batches.items():
+        total = len(flat_indices)
+        if total == 0:
+            continue
+        if total <= CHUNK:
+            text_widget.tag_add(tag_name, *flat_indices)
+        else:
+            for i in range(0, total, CHUNK):
+                text_widget.tag_add(tag_name, *flat_indices[i : i + CHUNK])
+
+
+def configure_syntax_tags(text_widget: tk.Text, force: bool = False) -> None:
+    """
+    Configura as tags de cores de sintaxe (XML e SQL) de acordo com o tema atual (Claro/Escuro).
+    Mantém cache do modo aplicado no widget para evitar reconfigurações redundantes.
+    """
     try:
         mode = ctk.get_appearance_mode()
+        if not force and getattr(text_widget, "_syntax_tags_mode", None) == mode:
+            return
+
         is_dark = (mode == "Dark")
         idx = 1 if is_dark else 0
 
@@ -115,15 +205,18 @@ def configure_syntax_tags(text_widget: tk.Text) -> None:
 
         # Garante que a seleção de texto ('sel') fique sempre visível acima das cores de sintaxe
         text_widget.tag_raise("sel")
+        text_widget._syntax_tags_mode = mode
     except Exception:
         pass
 
 
 def clear_syntax_tags(text_widget: tk.Text, start_idx: str = "1.0", end_idx: str = "end") -> None:
-    """Remove as tags de coloração de sintaxe XML/SQL no intervalo especificado."""
+    """Remove apenas as tags de sintaxe que efetivamente existem no widget no intervalo especificado."""
     try:
+        existing = set(text_widget.tag_names())
         for tag_name in ALL_SYNTAX_TAGS:
-            text_widget.tag_remove(tag_name, start_idx, end_idx)
+            if tag_name in existing:
+                text_widget.tag_remove(tag_name, start_idx, end_idx)
     except Exception:
         pass
 
@@ -136,7 +229,7 @@ def convert_selection_case(
     """
     Converte o texto selecionado no editor (ou no campo de título, se selecionado lá)
     para MAIÚSCULAS (uppercase=True) ou minúsculas (uppercase=False).
-    Mantém a seleção ativa após a conversão para facilitar alternância.
+    Mantém a seleção ativa e preserva tags por intervalos (sem loop caractere-a-caractere).
     """
     text_widget = ctk_textbox._textbox
 
@@ -152,16 +245,29 @@ def convert_selection_case(
         converted = selected_text.upper() if uppercase else selected_text.lower()
         if converted != selected_text:
             commit_history_before_action(ctk_textbox)
-            # Preserva tags por caractere (mantém trechos parciais de negrito/itálico/fonte)
-            per_char_tags: List[Tuple[int, List[str]]] = []
-            for offset in range(len(selected_text)):
-                c_idx = f"{start_idx} + {offset} chars"
-                c_tags = [
-                    t for t in text_widget.tag_names(c_idx)
-                    if t not in ("sel", "spelling_error")
-                ]
-                if c_tags:
-                    per_char_tags.append((offset, c_tags))
+
+            # Preserva intervalos de tags existentes dentro da seleção em O(K) via tag_ranges
+            preserved_batches: Dict[str, List[str]] = {}
+            s_tuple = tuple(int(p) for p in start_idx.split("."))
+            e_tuple = tuple(int(p) for p in end_idx.split("."))
+            for tag in text_widget.tag_names():
+                if tag in ("sel", "spelling_error"):
+                    continue
+                ranges = text_widget.tag_ranges(tag)
+                if not ranges:
+                    continue
+                for i in range(0, len(ranges), 2):
+                    rs_str, re_str = str(ranges[i]), str(ranges[i + 1])
+                    rs_t = tuple(int(p) for p in rs_str.split("."))
+                    re_t = tuple(int(p) for p in re_str.split("."))
+                    if re_t <= s_tuple:
+                        continue
+                    if rs_t >= e_tuple:
+                        break
+                    cs = rs_str if rs_t > s_tuple else start_idx
+                    ce = re_str if re_t < e_tuple else end_idx
+                    preserved_batches.setdefault(tag, []).extend((cs, ce))
+
             try:
                 text_widget.edit_separator()
             except Exception:
@@ -172,13 +278,9 @@ def convert_selection_case(
                 text_widget.edit_separator()
             except Exception:
                 pass
-            new_end_idx = f"{start_idx} + {len(converted)} chars"
-            for offset, c_tags in per_char_tags:
-                if offset < len(converted):
-                    c_start = f"{start_idx} + {offset} chars"
-                    c_end = f"{start_idx} + {offset + 1} chars"
-                    for t in c_tags:
-                        text_widget.tag_add(t, c_start, c_end)
+
+            new_end_idx = text_widget.index(f"{start_idx} + {len(converted)} chars")
+            _apply_tag_batches(text_widget, preserved_batches)
             text_widget.tag_add("sel", start_idx, new_end_idx)
             text_widget.mark_set("insert", new_end_idx)
             text_widget.focus_set()
@@ -263,21 +365,16 @@ def format_sql_string(raw_text: str) -> str:
     if not raw_text or not raw_text.strip():
         return raw_text
 
-    # Protege comentários e strings durante a conversão de keywords
+    # Protege comentários e strings durante a conversão de keywords com busca O(log P)
     protected_spans: List[Tuple[int, int]] = []
     for m in _RE_SQL_COMMENT.finditer(raw_text):
         protected_spans.append((m.start(), m.end()))
     for m in _RE_SQL_STRING.finditer(raw_text):
         protected_spans.append((m.start(), m.end()))
-
-    def _is_protected(pos: int) -> bool:
-        for s, e in protected_spans:
-            if s <= pos < e:
-                return True
-        return False
+    protected_index = _IntervalIndex(protected_spans)
 
     def _replace_word(match: re.Match) -> str:
-        if _is_protected(match.start()):
+        if protected_index.contains(match.start()):
             return match.group(0)
         word = match.group(1)
         upper_w = word.upper()
@@ -300,78 +397,141 @@ def format_sql_string(raw_text: str) -> str:
     return result
 
 
-def highlight_xml_range(text_widget: tk.Text, start_idx: str = "1.0", end_idx: str = "end") -> None:
-    """Aplica coloração de sintaxe XML no intervalo indicado do widget de texto."""
-    configure_syntax_tags(text_widget)
-    clear_syntax_tags(text_widget, start_idx, end_idx)
+def _collect_xml_batches(
+    segment: str,
+    mapper: OffsetMapper,
+    batches: Dict[str, List[str]],
+) -> List[Tuple[int, int]]:
+    """
+    Coleta todos os tokens XML de `segment` em `batches` usando `mapper` O(log L)
+    e retorna os intervalos (start, end) cobertos por tags/comentários/CDATA XML.
+    """
+    xml_covered: List[Tuple[int, int]] = []
+    to_tk = mapper.to_tk
 
-    segment = text_widget.get(start_idx, end_idx)
-    if not segment:
-        return
+    b_bracket = batches.setdefault("syntax_xml_bracket", [])
+    b_tag = batches.setdefault("syntax_xml_tag", [])
+    b_attr_name = batches.setdefault("syntax_xml_attr_name", [])
+    b_attr_val = batches.setdefault("syntax_xml_attr_val", [])
+    b_cdata = batches.setdefault("syntax_xml_cdata", [])
+    b_comment = batches.setdefault("syntax_xml_comment", [])
 
     # 1. Tags XML (<tag attr="val">, </tag>, <?xml ...?>)
     for match in _RE_XML_TAG.finditer(segment):
         tag_start = match.start()
+        tag_end = match.end()
+        xml_covered.append((tag_start, tag_end))
         tag_text = match.group(0)
 
         parts = _RE_XML_TAG_PARTS.match(tag_text)
         if not parts:
-            s_pos = f"{start_idx} + {tag_start} chars"
-            e_pos = f"{start_idx} + {match.end()} chars"
-            text_widget.tag_add("syntax_xml_tag", s_pos, e_pos)
+            b_tag.extend((to_tk(tag_start), to_tk(tag_end)))
             continue
 
         open_br, tag_name, attrs_part, close_br = parts.groups()
 
-        # Delimitador de abertura (<, </, <?)
         p0 = tag_start
         p1 = p0 + len(open_br)
-        text_widget.tag_add("syntax_xml_bracket", f"{start_idx} + {p0} chars", f"{start_idx} + {p1} chars")
+        b_bracket.extend((to_tk(p0), to_tk(p1)))
 
-        # Nome da tag
         p2 = p1 + len(tag_name)
-        text_widget.tag_add("syntax_xml_tag", f"{start_idx} + {p1} chars", f"{start_idx} + {p2} chars")
+        b_tag.extend((to_tk(p1), to_tk(p2)))
 
-        # Atributos dentro da tag
         if attrs_part:
             attr_offset = p2
             for attr_m in _RE_XML_ATTR.finditer(attrs_part):
                 a_name_s = attr_offset + attr_m.start(1)
                 a_name_e = attr_offset + attr_m.end(1)
-                text_widget.tag_add(
-                    "syntax_xml_attr_name",
-                    f"{start_idx} + {a_name_s} chars",
-                    f"{start_idx} + {a_name_e} chars",
-                )
+                b_attr_name.extend((to_tk(a_name_s), to_tk(a_name_e)))
 
                 a_val_s = attr_offset + attr_m.start(3)
                 a_val_e = attr_offset + attr_m.end(3)
-                text_widget.tag_add(
-                    "syntax_xml_attr_val",
-                    f"{start_idx} + {a_val_s} chars",
-                    f"{start_idx} + {a_val_e} chars",
-                )
+                b_attr_val.extend((to_tk(a_val_s), to_tk(a_val_e)))
 
-        # Delimitador de fechamento (>, />, ?>)
-        p3 = match.end() - len(close_br)
-        p4 = match.end()
-        text_widget.tag_add("syntax_xml_bracket", f"{start_idx} + {p3} chars", f"{start_idx} + {p4} chars")
+        p3 = tag_end - len(close_br)
+        b_bracket.extend((to_tk(p3), to_tk(tag_end)))
 
     # 2. CDATA
     for match in _RE_XML_CDATA.finditer(segment):
-        s_pos = f"{start_idx} + {match.start()} chars"
-        e_pos = f"{start_idx} + {match.end()} chars"
-        text_widget.tag_add("syntax_xml_cdata", s_pos, e_pos)
+        s, e = match.start(), match.end()
+        xml_covered.append((s, e))
+        b_cdata.extend((to_tk(s), to_tk(e)))
 
     # 3. Comentários XML (<!-- ... -->)
     for match in _RE_XML_COMMENT.finditer(segment):
-        s_pos = f"{start_idx} + {match.start()} chars"
-        e_pos = f"{start_idx} + {match.end()} chars"
-        text_widget.tag_add("syntax_xml_comment", s_pos, e_pos)
+        s, e = match.start(), match.end()
+        xml_covered.append((s, e))
+        b_comment.extend((to_tk(s), to_tk(e)))
+
+    return xml_covered
 
 
-def highlight_sql_range(text_widget: tk.Text, start_idx: str = "1.0", end_idx: str = "end") -> None:
-    """Aplica coloração de sintaxe SQL/PLSQL no intervalo indicado do widget de texto."""
+def _collect_sql_batches(
+    segment: str,
+    mapper: OffsetMapper,
+    batches: Dict[str, List[str]],
+    exclude_index: Optional[_IntervalIndex] = None,
+) -> None:
+    """Coleta todos os tokens SQL de `segment` em `batches` com busca O(log P) e mapeamento O(log L)."""
+    to_tk = mapper.to_tk
+
+    comment_spans: List[Tuple[int, int]] = []
+    protected_spans: List[Tuple[int, int]] = []
+    b_comment = batches.setdefault("syntax_sql_comment", [])
+    b_string = batches.setdefault("syntax_sql_string", [])
+    b_operator = batches.setdefault("syntax_sql_operator", [])
+    b_number = batches.setdefault("syntax_sql_number", [])
+    b_function = batches.setdefault("syntax_sql_function", [])
+    b_keyword = batches.setdefault("syntax_sql_keyword", [])
+
+    for m in _RE_SQL_COMMENT.finditer(segment):
+        s, e = m.start(), m.end()
+        if exclude_index is not None and exclude_index.contains(s):
+            continue
+        comment_spans.append((s, e))
+        protected_spans.append((s, e))
+        b_comment.extend((to_tk(s), to_tk(e)))
+
+    comment_index = _IntervalIndex(comment_spans)
+
+    for m in _RE_SQL_STRING.finditer(segment):
+        s, e = m.start(), m.end()
+        if comment_index.contains(s):
+            continue
+        if exclude_index is not None and exclude_index.contains(s):
+            continue
+        protected_spans.append((s, e))
+        b_string.extend((to_tk(s), to_tk(e)))
+
+    protected_index = _IntervalIndex(protected_spans)
+
+    def _skip(pos: int) -> bool:
+        if protected_index.contains(pos):
+            return True
+        if exclude_index is not None and exclude_index.contains(pos):
+            return True
+        return False
+
+    for m in _RE_SQL_OPERATOR.finditer(segment):
+        if not _skip(m.start()):
+            b_operator.extend((to_tk(m.start()), to_tk(m.end())))
+
+    for m in _RE_SQL_NUMBER.finditer(segment):
+        if not _skip(m.start()):
+            b_number.extend((to_tk(m.start()), to_tk(m.end())))
+
+    for m in _RE_SQL_WORD.finditer(segment):
+        if _skip(m.start()):
+            continue
+        upper_w = m.group(1).upper()
+        if upper_w in SQL_FUNCTIONS:
+            b_function.extend((to_tk(m.start()), to_tk(m.end())))
+        elif upper_w in SQL_KEYWORDS:
+            b_keyword.extend((to_tk(m.start()), to_tk(m.end())))
+
+
+def highlight_xml_range(text_widget: tk.Text, start_idx: str = "1.0", end_idx: str = "end") -> None:
+    """Aplica coloração de sintaxe XML no intervalo indicado usando inserção em lote O(N log L)."""
     configure_syntax_tags(text_widget)
     clear_syntax_tags(text_widget, start_idx, end_idx)
 
@@ -379,66 +539,25 @@ def highlight_sql_range(text_widget: tk.Text, start_idx: str = "1.0", end_idx: s
     if not segment:
         return
 
-    # 1. Identifica intervalos de comentários e strings para não colorir keywords dentro deles
-    protected_spans: List[Tuple[int, int, str]] = []
-    for m in _RE_SQL_COMMENT.finditer(segment):
-        protected_spans.append((m.start(), m.end(), "syntax_sql_comment"))
+    mapper = OffsetMapper.from_tk_index(text_widget, start_idx, segment)
+    batches: Dict[str, List[str]] = {}
+    _collect_xml_batches(segment, mapper, batches)
+    _apply_tag_batches(text_widget, batches)
 
-    for m in _RE_SQL_STRING.finditer(segment):
-        # Só adiciona string se não estiver dentro de um comentário
-        in_comment = any(cs <= m.start() < ce for cs, ce, _ in protected_spans)
-        if not in_comment:
-            protected_spans.append((m.start(), m.end(), "syntax_sql_string"))
 
-    def _in_protected(pos: int) -> bool:
-        for s, e, _ in protected_spans:
-            if s <= pos < e:
-                return True
-        return False
+def highlight_sql_range(text_widget: tk.Text, start_idx: str = "1.0", end_idx: str = "end") -> None:
+    """Aplica coloração de sintaxe SQL/PLSQL no intervalo indicado usando inserção em lote O(N log L)."""
+    configure_syntax_tags(text_widget)
+    clear_syntax_tags(text_widget, start_idx, end_idx)
 
-    # 2. Operadores SQL
-    for m in _RE_SQL_OPERATOR.finditer(segment):
-        if not _in_protected(m.start()):
-            text_widget.tag_add(
-                "syntax_sql_operator",
-                f"{start_idx} + {m.start()} chars",
-                f"{start_idx} + {m.end()} chars",
-            )
+    segment = text_widget.get(start_idx, end_idx)
+    if not segment:
+        return
 
-    # 3. Números
-    for m in _RE_SQL_NUMBER.finditer(segment):
-        if not _in_protected(m.start()):
-            text_widget.tag_add(
-                "syntax_sql_number",
-                f"{start_idx} + {m.start()} chars",
-                f"{start_idx} + {m.end()} chars",
-            )
-
-    # 4. Palavras-chave e Funções SQL
-    for m in _RE_SQL_WORD.finditer(segment):
-        if _in_protected(m.start()):
-            continue
-        upper_w = m.group(1).upper()
-        if upper_w in SQL_FUNCTIONS:
-            text_widget.tag_add(
-                "syntax_sql_function",
-                f"{start_idx} + {m.start()} chars",
-                f"{start_idx} + {m.end()} chars",
-            )
-        elif upper_w in SQL_KEYWORDS:
-            text_widget.tag_add(
-                "syntax_sql_keyword",
-                f"{start_idx} + {m.start()} chars",
-                f"{start_idx} + {m.end()} chars",
-            )
-
-    # 5. Strings e Comentários
-    for s, e, tag_name in protected_spans:
-        text_widget.tag_add(
-            tag_name,
-            f"{start_idx} + {s} chars",
-            f"{start_idx} + {e} chars",
-        )
+    mapper = OffsetMapper.from_tk_index(text_widget, start_idx, segment)
+    batches: Dict[str, List[str]] = {}
+    _collect_sql_batches(segment, mapper, batches)
+    _apply_tag_batches(text_widget, batches)
 
 
 def format_and_highlight_xml(ctk_textbox: ctk.CTkTextbox, indent_xml: bool = True) -> bool:
@@ -470,7 +589,7 @@ def format_and_highlight_xml(ctk_textbox: ctk.CTkTextbox, indent_xml: bool = Tru
                 text_widget.edit_separator()
             except Exception:
                 pass
-            end_idx = f"{start_idx} + {len(formatted)} chars"
+            end_idx = text_widget.index(f"{start_idx} + {len(formatted)} chars")
             text_widget.tag_add("sel", start_idx, end_idx)
         highlight_xml_range(text_widget, start_idx, end_idx)
         if indent_xml:
@@ -538,7 +657,7 @@ def format_and_highlight_sql(ctk_textbox: ctk.CTkTextbox, format_keywords: bool 
                 text_widget.edit_separator()
             except Exception:
                 pass
-            end_idx = f"{start_idx} + {len(formatted)} chars"
+            end_idx = text_widget.index(f"{start_idx} + {len(formatted)} chars")
             text_widget.tag_add("sel", start_idx, end_idx)
         highlight_sql_range(text_widget, start_idx, end_idx)
         if format_keywords:
@@ -689,44 +808,65 @@ def enable_undo_redo(
     text_widget.bind("<Control-Shift-Z>", _on_redo_event)
 
 
-def auto_highlight_content(ctk_textbox: ctk.CTkTextbox) -> Optional[str]:
+def auto_highlight_range(
+    ctk_textbox: ctk.CTkTextbox,
+    start_idx: str = "1.0",
+    end_idx: str = "end-1c",
+    content: Optional[str] = None,
+) -> Optional[str]:
     """
-    Detecta automaticamente se o texto possui estruturas XML e/ou SQL e aplica a
-    coloração de sintaxe correspondente (útil ao carregar uma nota ou colar texto).
+    Detecta automaticamente estruturas XML e/ou SQL em um intervalo específico
+    (ex.: apenas o trecho recém-colado) e aplica coloração em lote em uma única passagem.
     Retorna 'XML', 'SQL', 'XML+SQL' ou None.
     """
     try:
         text_widget = ctk_textbox._textbox
-        content = text_widget.get("1.0", "end-1c")
-        if not content or not content.strip():
-            clear_syntax_tags(text_widget)
+        segment = content if content is not None else text_widget.get(start_idx, end_idx)
+        if not segment or not segment.strip():
+            clear_syntax_tags(text_widget, start_idx, end_idx)
             return None
 
-        has_xml = bool(_RE_HAS_XML.search(content))
-        has_sql = bool(_RE_HAS_SQL.search(content))
+        has_xml = ("<" in segment and ">" in segment and bool(_RE_HAS_XML.search(segment)))
+        has_sql = bool(_RE_HAS_SQL.search(segment))
 
         if not has_xml and not has_sql:
             return None
 
         configure_syntax_tags(text_widget)
+        clear_syntax_tags(text_widget, start_idx, end_idx)
+
+        mapper = OffsetMapper.from_tk_index(text_widget, start_idx, segment)
+        batches: Dict[str, List[str]] = {}
 
         if has_xml and not has_sql:
-            highlight_xml_range(text_widget, "1.0", "end-1c")
+            _collect_xml_batches(segment, mapper, batches)
+            _apply_tag_batches(text_widget, batches)
             return "XML"
         elif has_sql and not has_xml:
-            highlight_sql_range(text_widget, "1.0", "end-1c")
+            _collect_sql_batches(segment, mapper, batches)
+            _apply_tag_batches(text_widget, batches)
             return "SQL"
         else:
-            # Possui ambos (ex: SQL com XMLType ou nota com SQL e XML)
-            highlight_sql_range(text_widget, "1.0", "end-1c")
-            # Aplica tags XML por cima apenas nos trechos de tags <...>
-            for match in _RE_XML_TAG.finditer(content):
-                s_idx = f"1.0 + {match.start()} chars"
-                e_idx = f"1.0 + {match.end()} chars"
-                highlight_xml_range(text_widget, s_idx, e_idx)
+            # Passagem única combinada: coleta XML primeiro e exclui seus intervalos do SQL
+            xml_spans = _collect_xml_batches(segment, mapper, batches)
+            xml_index = _IntervalIndex(xml_spans)
+            _collect_sql_batches(segment, mapper, batches, exclude_index=xml_index)
+            _apply_tag_batches(text_widget, batches)
             return "XML+SQL"
     except Exception:
         return None
+
+
+def auto_highlight_content(
+    ctk_textbox: ctk.CTkTextbox,
+    content: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Detecta automaticamente se o texto possui estruturas XML e/ou SQL e aplica a
+    coloração de sintaxe correspondente em lote (alta performance).
+    Retorna 'XML', 'SQL', 'XML+SQL' ou None.
+    """
+    return auto_highlight_range(ctk_textbox, "1.0", "end-1c", content=content)
 
 
 def _normalize_with_map(text: str) -> Tuple[str, List[int]]:
@@ -802,7 +942,7 @@ def clear_search_highlights(ctk_textbox: ctk.CTkTextbox) -> None:
 
 def highlight_search_matches(ctk_textbox: ctk.CTkTextbox, query: str) -> List[Tuple[str, str]]:
     """
-    Destaca todas as ocorrências da pesquisa no editor e retorna a lista ordenada
+    Destaca todas as ocorrências da pesquisa no editor em lote e retorna a lista ordenada
     de pares de índices Tkinter (start_idx, end_idx) para navegação com F3.
     """
     matches: List[Tuple[str, str]] = []
@@ -815,11 +955,16 @@ def highlight_search_matches(ctk_textbox: ctk.CTkTextbox, query: str) -> List[Tu
 
         content = tb.get("1.0", "end-1c")
         spans = find_query_spans(content, query)
-        for s_off, e_off in spans:
-            s_idx = tb.index(f"1.0 + {s_off} chars")
-            e_idx = tb.index(f"1.0 + {e_off} chars")
-            tb.tag_add("search_highlight", s_idx, e_idx)
-            matches.append((s_idx, e_idx))
+        if spans:
+            mapper = OffsetMapper(content, base_line=1, base_col=0)
+            flat: List[str] = []
+            for s_off, e_off in spans:
+                s_idx = mapper.to_tk(s_off)
+                e_idx = mapper.to_tk(e_off)
+                flat.append(s_idx)
+                flat.append(e_idx)
+                matches.append((s_idx, e_idx))
+            _apply_tag_batches(tb, {"search_highlight": flat})
 
         tb.tag_raise("search_highlight")
         tb.tag_raise("search_highlight_current")

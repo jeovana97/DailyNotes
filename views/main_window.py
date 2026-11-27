@@ -329,6 +329,7 @@ class MainWindow(ctk.CTk):
 
         self.current_user: Optional[User] = None
         self.active_view = None
+        self._cached_diary_view: Optional[DiaryView] = None
         self.nav_buttons = {}
         self._nav_items_meta = {}
         self.sidebar_collapsed: bool = False
@@ -382,9 +383,21 @@ class MainWindow(ctk.CTk):
         except Exception:
             pass
 
+    def _clear_cached_diary_view(self):
+        """Descarta a instância em cache do Diário (usado em logout, troca de usuário, tema ou restore)."""
+        if self._cached_diary_view is not None:
+            try:
+                if self._cached_diary_view.winfo_exists():
+                    self._cached_diary_view.destroy()
+            except Exception:
+                pass
+            self._cached_diary_view = None
+
     def _show_login_screen(self):
         """Exibe a tela de login ou configuração inicial."""
         self.current_user = None
+        self.active_view = None
+        self._clear_cached_diary_view()
 
         # Limpa todos os widgets
         for widget in self.winfo_children():
@@ -423,6 +436,8 @@ class MainWindow(ctk.CTk):
 
     def _build_main_layout(self):
         """Monta a barra lateral de navegação e o container de conteúdo principal."""
+        self.active_view = None
+        self._clear_cached_diary_view()
         for widget in self.winfo_children():
             widget.destroy()
 
@@ -843,7 +858,14 @@ class MainWindow(ctk.CTk):
 
         if self.active_view and hasattr(self.active_view, "txt_content"):
             try:
-                configure_syntax_tags(self.active_view.txt_content._textbox)
+                configure_syntax_tags(self.active_view.txt_content._textbox, force=True)
+            except Exception:
+                pass
+        if self._cached_diary_view is not None and self._cached_diary_view is not self.active_view:
+            try:
+                if self._cached_diary_view.winfo_exists():
+                    configure_syntax_tags(self._cached_diary_view.txt_content._textbox, force=True)
+                    self._cached_diary_view._spell_tag_mode = None
             except Exception:
                 pass
         if self.active_view and hasattr(self.active_view, "refresh_theme"):
@@ -1096,28 +1118,52 @@ class MainWindow(ctk.CTk):
                     text_color=config.COLORS["text_dark"],
                 )
 
-        # Destrói a tela ativa anterior
+        # Oculta o Diário em cache (evita recriar 26+ widgets CustomTkinter a cada troca de menu)
+        # ou destrói a tela ativa anterior
         if self.active_view:
-            self.active_view.destroy()
+            if self.active_view is self._cached_diary_view:
+                if hasattr(self.active_view, "pause_background_tasks"):
+                    self.active_view.pause_background_tasks()
+                self.active_view.pack_forget()
+            else:
+                self.active_view.destroy()
             self.active_view = None
 
-        # Instancia a nova tela
+        # Instancia ou reexibe a nova tela
         if view_name == "diary":
             target_date = kwargs.get("date_iso")
             target_user_id = kwargs.get("user_id")
 
-            self.active_view = DiaryView(
-                self.content_frame,
-                current_user=self.current_user,
-                diary_service=self.diary_service,
-                auth_service=self.auth_service,
-                backup_service=self.backup_service,
-                spell_service=self.spell_service,
-                on_navigate_to_search=lambda: self.navigate_to("search"),
-                on_navigate_to_history=lambda d: self.navigate_to("history", initial_date=d),
-                on_navigate_to_import=lambda: self.navigate_to("import"),
+            reuse_cache = (
+                self._cached_diary_view is not None
+                and self._cached_diary_view.winfo_exists()
+                and self._cached_diary_view.current_user.id == self.current_user.id
             )
-            self.active_view.pack(fill="both", expand=True)
+
+            if reuse_cache:
+                self.active_view = self._cached_diary_view
+                self.active_view.pack(fill="both", expand=True)
+                # Re-vincula Ctrl+S do toplevel para o Diário reaberto
+                try:
+                    self.bind("<Control-s>", self.active_view._on_toplevel_ctrl_s)
+                    self.bind("<Control-S>", self.active_view._on_toplevel_ctrl_s)
+                except Exception:
+                    pass
+            else:
+                self._clear_cached_diary_view()
+                self.active_view = DiaryView(
+                    self.content_frame,
+                    current_user=self.current_user,
+                    diary_service=self.diary_service,
+                    auth_service=self.auth_service,
+                    backup_service=self.backup_service,
+                    spell_service=self.spell_service,
+                    on_navigate_to_search=lambda: self.navigate_to("search"),
+                    on_navigate_to_history=lambda d: self.navigate_to("history", initial_date=d),
+                    on_navigate_to_import=lambda: self.navigate_to("import"),
+                )
+                self._cached_diary_view = self.active_view
+                self.active_view.pack(fill="both", expand=True)
 
             if target_user_id and self.current_user.can_view_other_diaries:
                 all_u = self.auth_service.list_users(self.current_user)
@@ -1128,6 +1174,8 @@ class MainWindow(ctk.CTk):
 
             if target_date:
                 self.active_view.set_date(target_date)
+            elif reuse_cache:
+                self.active_view.reload_on_reopen()
 
         elif view_name == "notes":
             self.active_view = NotesView(
@@ -1195,7 +1243,7 @@ class MainWindow(ctk.CTk):
                 backup_service=self.backup_service,
                 diary_service=self.diary_service,
                 spell_service=self.spell_service,
-                on_data_restored=lambda: self.navigate_to("diary"),
+                on_data_restored=lambda: (self._clear_cached_diary_view(), self.navigate_to("diary")),
             )
             self.active_view.pack(fill="both", expand=True)
 

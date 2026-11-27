@@ -8,7 +8,8 @@ persistido no banco de dados SQLite da aplicação e integrado com a API nativa 
 import os
 import sys
 import logging
-from typing import List, Optional, Set
+import threading
+from typing import Callable, List, Optional, Set, Tuple
 from dataclasses import dataclass
 
 import config
@@ -48,6 +49,16 @@ class WindowsSpellCheckService:
         self._factory = None
         self._ignored_words: Set[str] = set()
         self._custom_words: Set[str] = set()
+        self._factory_cls = None
+        self._checker_cls = None
+        self._clsid_factory = None
+
+        # Estado do worker assíncrono STA dedicado (evita travar a UI thread com chamadas COM)
+        self._async_lock = threading.Lock()
+        self._async_event = threading.Event()
+        self._async_pending: Optional[Tuple[int, str, Callable[[int, List[SpellingError]], None]]] = None
+        self._async_thread: Optional[threading.Thread] = None
+        self._async_seq: int = 0
 
         self._ensure_dictionary_table()
 
@@ -164,6 +175,9 @@ class WindowsSpellCheckService:
                               (["out", "retval"], POINTER(POINTER(ISpellChecker)), "value")),
                 ]
 
+            self._factory_cls = ISpellCheckerFactory
+            self._checker_cls = ISpellChecker
+            self._clsid_factory = CLSID_SpellCheckerFactory
             self._factory = comtypes.client.CreateObject(CLSID_SpellCheckerFactory, interface=ISpellCheckerFactory)
 
             # Tenta encontrar o primeiro idioma disponível na ordem de preferência
@@ -332,22 +346,41 @@ class WindowsSpellCheckService:
         return removed_db or True
 
     # =========================================================================
-    # Verificação Ortográfica e Sugestões
+    # Verificação Ortográfica (Síncrona e Assíncrona sem travar a UI)
     # =========================================================================
 
-    def check_text(self, text: str) -> List[SpellingError]:
-        """
-        Analisa um texto e retorna todos os erros ortográficos com posição e comprimento.
-        """
-        if not self.is_available or not text or not text.strip():
+    def _check_text_with_checker(
+        self,
+        checker,
+        text: str,
+        max_chars: Optional[int] = None,
+    ) -> List[SpellingError]:
+        """Executa a checagem usando uma instância específica de ISpellChecker (thread-safe por STA)."""
+        if checker is None or not text or not text.strip():
             return []
+
+        offset_base = 0
+        sample = text
+        if max_chars is not None and len(text) > max_chars:
+            # Em documentos muito extensos, prioriza a porção final (onde o usuário edita)
+            # ajustando para fronteira de linha/espaço
+            cut = len(text) - max_chars
+            nl = text.find("\n", cut)
+            if nl != -1 and (nl - cut) < 500:
+                cut = nl + 1
+            offset_base = cut
+            sample = text[cut:]
+
+        ignored = frozenset(self._ignored_words)
+        custom = frozenset(self._custom_words)
 
         errors: List[SpellingError] = []
         try:
-            enum_errors = self._checker.Check(text)
+            enum_errors = checker.Check(sample)
             if not enum_errors:
                 return []
 
+            sample_len = len(sample)
             while True:
                 try:
                     err = enum_errors.Next()
@@ -357,20 +390,115 @@ class WindowsSpellCheckService:
                     length = err.get_Length()
                     action = err.get_CorrectiveAction()
 
-                    # Garante limites válidos dentro do texto original
-                    if start < len(text) and (start + length) <= len(text):
-                        word = text[start : start + length]
+                    if start < sample_len and (start + length) <= sample_len:
+                        word = sample[start : start + length]
                         w_lower = word.lower()
-                        # Ignora palavras na lista da sessão ou no dicionário personalizado
-                        if w_lower not in self._ignored_words and w_lower not in self._custom_words:
-                            errors.append(SpellingError(start=start, length=length, word=word, action=action))
+                        if w_lower not in ignored and w_lower not in custom:
+                            errors.append(
+                                SpellingError(
+                                    start=offset_base + start,
+                                    length=length,
+                                    word=word,
+                                    action=action,
+                                )
+                            )
                 except Exception:
                     break
-
         except Exception as e:
             logger.debug(f"Erro ao verificar texto com Windows Spell Checker: {e}")
 
         return errors
+
+    def _ensure_async_worker(self) -> None:
+        if self._async_thread is not None and self._async_thread.is_alive():
+            return
+        self._async_thread = threading.Thread(
+            target=self._async_worker_loop,
+            name="DailyNotesSpellCheckWorker",
+            daemon=True,
+        )
+        self._async_thread.start()
+
+    def _async_worker_loop(self) -> None:
+        """Thread STA dedicada com sua própria instância COM ISpellChecker para nunca travar a UI."""
+        worker_checker = None
+        try:
+            import comtypes
+            import comtypes.client
+
+            try:
+                comtypes.CoInitialize()
+            except Exception:
+                pass
+
+            if self._clsid_factory is not None and self._factory_cls is not None and self._active_language:
+                factory = comtypes.client.CreateObject(self._clsid_factory, interface=self._factory_cls)
+                worker_checker = factory.CreateSpellChecker(self._active_language)
+        except Exception as e:
+            logger.debug(f"Não foi possível inicializar worker COM de ortografia: {e}")
+            worker_checker = None
+
+        while True:
+            self._async_event.wait()
+            with self._async_lock:
+                self._async_event.clear()
+                job = self._async_pending
+                self._async_pending = None
+
+            if job is None:
+                continue
+
+            req_id, text, callback = job
+            if worker_checker is None:
+                try:
+                    callback(req_id, [])
+                except Exception:
+                    pass
+                continue
+
+            # Ignora pedido já superado antes mesmo de chamar o COM
+            with self._async_lock:
+                if req_id != self._async_seq:
+                    continue
+
+            errors = self._check_text_with_checker(worker_checker, text, max_chars=25000)
+
+            with self._async_lock:
+                if req_id != self._async_seq:
+                    continue
+
+            try:
+                callback(req_id, errors)
+            except Exception:
+                pass
+
+    def check_text_async(
+        self,
+        text: str,
+        callback: Callable[[int, List[SpellingError]], None],
+    ) -> int:
+        """
+        Agenda verificação ortográfica em segundo plano (coalescing: substitui qualquer pedido anterior).
+        Retorna `request_id` para validação de obsolescência na thread da UI.
+        """
+        with self._async_lock:
+            self._async_seq += 1
+            req_id = self._async_seq
+            if not self.is_available or not text or not text.strip():
+                self._async_pending = None
+                return req_id
+            self._async_pending = (req_id, text, callback)
+            self._ensure_async_worker()
+            self._async_event.set()
+            return req_id
+
+    def check_text(self, text: str) -> List[SpellingError]:
+        """
+        Analisa um texto e retorna todos os erros ortográficos com posição e comprimento.
+        """
+        if not self.is_available or not text or not text.strip():
+            return []
+        return self._check_text_with_checker(self._checker, text, max_chars=None)
 
     def get_suggestions(self, word: str, limit: int = 6) -> List[str]:
         """

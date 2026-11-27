@@ -7,13 +7,11 @@ snapshots completos contendo:
 - Coloração de sintaxe XML/SQL (e limpeza de cores)
 - Posição do cursor e seleção ativa
 
-Assim, Ctrl+Z e Ctrl+Y desfazem e refazem de forma consistente tanto digitação/colagem/recorte
-quanto qualquer botão da barra de ações (Fonte, Tamanho, B, I, U, S, MAIÚSCULO, minúsculo,
-XML, SQL e Limpar Cores).
+Otimizado para documentos longos: usa captura/restauração em lote de tags sem chamadas
+redundantes a `tb.compare` e evita snapshots desnecessários durante digitação rápida.
 """
 
 from dataclasses import dataclass
-import tkinter as tk
 from typing import Callable, List, Optional, Tuple
 import customtkinter as ctk
 
@@ -22,12 +20,13 @@ import customtkinter as ctk
 class EditorSnapshot:
     text: str
     formatting_json: str
-    syntax_spans: Tuple[Tuple[str, str, str], ...]
+    # Tupla de (tag_name, (start1, end1, start2, end2, ...)) para restauração em lote
+    syntax_tag_ranges: Tuple[Tuple[str, Tuple[str, ...]], ...]
     cursor: str
     selection: Optional[Tuple[str, str]]
 
-    def content_key(self) -> Tuple[str, str, Tuple[Tuple[str, str, str], ...]]:
-        return (self.text, self.formatting_json, self.syntax_spans)
+    def content_key(self) -> Tuple[str, str, Tuple[Tuple[str, Tuple[str, ...]], ...]]:
+        return (self.text, self.formatting_json, self.syntax_tag_ranges)
 
 
 class EditorHistoryManager:
@@ -50,7 +49,7 @@ class EditorHistoryManager:
         self,
         ctk_textbox: ctk.CTkTextbox,
         on_change_callback: Optional[Callable[[], None]] = None,
-        max_states: int = 150,
+        max_states: int = 120,
         typing_debounce_ms: int = 600,
     ):
         self.ctk_textbox = ctk_textbox
@@ -108,7 +107,7 @@ class EditorHistoryManager:
         self.record_snapshot()
 
     def capture_snapshot(self) -> EditorSnapshot:
-        """Captura o estado completo atual do editor."""
+        """Captura o estado completo atual do editor com mínimo de chamadas Tcl/Tk."""
         from utils.syntax_highlighter import ALL_SYNTAX_TAGS
 
         try:
@@ -122,15 +121,19 @@ class EditorHistoryManager:
         except Exception:
             fmt_json = ""
 
-        syntax_list: List[Tuple[str, str, str]] = []
+        syntax_list: List[Tuple[str, Tuple[str, ...]]] = []
         try:
+            # Só consulta tag_ranges das tags de sintaxe que de fato existem no widget
+            existing_tags = set(self.tb.tag_names())
+            tk_call = self.tb.tk.call
+            tk_split = self.tb.tk.splitlist
+            w = self.tb._w
             for tag_name in ALL_SYNTAX_TAGS:
-                ranges = self.tb.tag_ranges(tag_name)
-                for i in range(0, len(ranges), 2):
-                    s = str(ranges[i])
-                    e = str(ranges[i + 1])
-                    if self.tb.compare(s, "<", e):
-                        syntax_list.append((tag_name, s, e))
+                if tag_name not in existing_tags:
+                    continue
+                raw_ranges = tk_call(w, "tag", "ranges", tag_name)
+                if raw_ranges:
+                    syntax_list.append((tag_name, tuple(tk_split(raw_ranges))))
         except Exception:
             pass
 
@@ -150,7 +153,7 @@ class EditorHistoryManager:
         return EditorSnapshot(
             text=text,
             formatting_json=fmt_json,
-            syntax_spans=tuple(syntax_list),
+            syntax_tag_ranges=tuple(syntax_list),
             cursor=cursor,
             selection=selection,
         )
@@ -253,11 +256,9 @@ class EditorHistoryManager:
         if not (is_delete or is_char or is_boundary):
             return
 
-        # Se o usuário começou uma nova edição após ter dado Undo, invalida o Redo
-        if self._redo_stack and self._current_state is not None:
-            live = self.capture_snapshot()
-            if live.content_key() != self._current_state.content_key():
-                self._redo_stack.clear()
+        # Invalida a pilha de Redo imediatamente sem precisar capturar snapshot completo
+        if self._redo_stack:
+            self._redo_stack.clear()
 
         if is_boundary or self._had_selection_on_press:
             self._had_selection_on_press = False
@@ -286,18 +287,24 @@ class EditorHistoryManager:
         self._restoring = True
         self._cancel_debounce()
         try:
+            try:
+                self.tb.configure(undo=False)
+            except Exception:
+                pass
+
             self.tb.delete("1.0", "end")
             if snap.text:
                 self.tb.insert("1.0", snap.text)
 
             clear_syntax_tags(self.tb, "1.0", "end")
-            if snap.syntax_spans:
+            if snap.syntax_tag_ranges:
                 configure_syntax_tags(self.tb)
-                for tag_name, s, e in snap.syntax_spans:
-                    try:
-                        self.tb.tag_add(tag_name, s, e)
-                    except Exception:
-                        pass
+                for tag_name, flat_ranges in snap.syntax_tag_ranges:
+                    if flat_ranges:
+                        try:
+                            self.tb.tag_add(tag_name, *flat_ranges)
+                        except Exception:
+                            pass
 
             rich_text = self._get_rich_text()
             if rich_text is not None:
@@ -317,6 +324,7 @@ class EditorHistoryManager:
                 rich_text.sync_toolbar_state()
 
             try:
+                self.tb.configure(undo=True)
                 self.tb.edit_reset()
             except Exception:
                 pass

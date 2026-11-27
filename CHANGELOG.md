@@ -7,6 +7,17 @@ e este projeto adere ao [Semantic Versioning (SemVer)](https://semver.org/lang/p
 
 ---
 
+## [1.8.1] - 2026-11-27
+### Fixed
+- **Corrigida lentidão e travamento na abertura do Diário do Dia, troca de dias (Anterior / Hoje / Próximo) e colagem de textos (`Ctrl+V`):**
+  - Substituído o loop caractere-a-caractere (`O(N)`) em `utils/rich_text.py` (`_recompute_composite_fonts` e `_range_fully_has_tag`) por algoritmo sweep-line de intervalos (`O(K log K)`) com inserção em lote e cache da fonte base aplicada, reduzindo a troca de dias com formatação rica em até **15x**.
+  - Otimizado o destaque de sintaxe XML/SQL em `utils/syntax_highlighter.py` com `OffsetMapper` (`O(log L)` em Python puro), aplicação de tags em lote, cache de configuração por tema, passagem única para notas com XML+SQL combinados, busca binária em trechos protegidos e destaque incremental (`auto_highlight_range`) apenas nas linhas afetadas durante a colagem (`Ctrl+V`), reduzindo as chamadas Tcl/Tk em até **90x**.
+  - Movida a verificação ortográfica automática do Windows (`services/spellcheck_service.py`) para worker assíncrono em thread STA dedicada (`check_text_async`) com descarte automático de checagens obsoletas e aplicação de marcações em lote, eliminando congelamentos da interface durante abertura, troca de dia e colagem.
+  - Removidos reflows síncronos (`update_idletasks`) durante a colagem e salvamento automático silencioso no **Diário do Dia** (`views/diary_view.py`) e em **Notas & Pastas** (`views/notes_view.py`), além de ignorar teclas puras de navegação em `_on_text_modified` e otimizar snapshots de `EditorHistoryManager` (`utils/editor_history.py`).
+  - Adicionado cache inteligente da instância de `DiaryView` no `MainWindow` (`views/main_window.py`) para evitar reconstruir todos os botões e barras ao alternar entre o Diário e outros menus, mantendo recarga automática da data e posicionamento do cursor ao final do texto.
+
+---
+
 ## [1.8.0] - 2026-11-26
 ### Added
 - **Gerenciador Completo de Tarefas no menu Agendamentos** (estilo Microsoft To Do integrado ao Diário):

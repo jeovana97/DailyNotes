@@ -1,6 +1,6 @@
 # Diário de Anotações Inteligente (DailyNotes) 📓
 
-**Versão atual:** `1.8.0`
+**Versão atual:** `1.8.1`
 
 O **Diário de Anotações Inteligente (DailyNotes)** é um sistema desktop completo para Windows, desenvolvido em **Python** e **CustomTkinter**, projetado para centralizar, organizar e consultar tanto **anotações diárias por data** quanto **notas técnicas/permanentes organizadas em pastas e subpastas**.
 

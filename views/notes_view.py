@@ -26,11 +26,15 @@ from utils.editor_history import (
 )
 from utils.editor_shortcuts import EditorAssistController
 from utils.syntax_highlighter import (
+    ALL_SYNTAX_TAGS,
+    OffsetMapper,
+    _apply_tag_batches,
     convert_selection_case,
     format_and_highlight_xml,
     format_and_highlight_sql,
     clear_syntax_tags,
     auto_highlight_content,
+    auto_highlight_range,
     configure_syntax_tags,
     enable_undo_redo,
     perform_undo,
@@ -685,8 +689,10 @@ class NotesView(ctk.CTkFrame):
         self.autosave_enabled = tk.BooleanVar(value=True)
         self._suppress_change_events = False
 
-        # Controle do corretor ortográfico nativo do Windows
+        # Controle do corretor ortográfico nativo do Windows (assíncrono)
         self.spellcheck_timer_id = None
+        self._spellcheck_gen = 0
+        self._spell_tag_mode: Optional[str] = None
         self.spellcheck_enabled = tk.BooleanVar(value=self.spell_service.is_available)
 
         self._build_ui()
@@ -1989,11 +1995,26 @@ class NotesView(ctk.CTkFrame):
             self.entry_title.delete(0, "end")
             self.entry_title.insert(0, fresh_note.title)
 
-            self.txt_content.delete("1.0", "end")
-            self.txt_content.insert("1.0", fresh_note.content or "")
-            auto_highlight_content(self.txt_content)
+            self._spellcheck_gen += 1
+            note_content = fresh_note.content or ""
+            tb = self.txt_content._textbox
+            try:
+                tb.configure(undo=False)
+            except Exception:
+                pass
+            tb.delete("1.0", "end")
+            if note_content:
+                tb.insert("1.0", note_content)
+            clear_syntax_tags(tb, "1.0", "end")
+            self._clear_spelling_tags()
+            if note_content:
+                auto_highlight_content(self.txt_content, content=note_content)
             if hasattr(self, "rich_text"):
                 self.rich_text.load(getattr(fresh_note, "formatting_json", ""))
+            try:
+                tb.configure(undo=True)
+            except Exception:
+                pass
             reset_undo_stack(self.txt_content)
 
             self._refresh_folder_combo(fresh_note.folder_id)
@@ -2154,11 +2175,12 @@ class NotesView(ctk.CTkFrame):
             return False
 
         try:
-            self.lbl_save_status.configure(
-                text="🟡 Salvando...",
-                text_color=config.COLORS["warning"],
-            )
-            self.update_idletasks()
+            if not silent:
+                self.lbl_save_status.configure(
+                    text="🟡 Salvando...",
+                    text_color=config.COLORS["warning"],
+                )
+                self.update_idletasks()
 
             note_id = self.active_note.id if self.active_note else None
             fmt_json = self.rich_text.serialize() if hasattr(self, "rich_text") else ""
@@ -2466,8 +2488,8 @@ class NotesView(ctk.CTkFrame):
 
     def _on_paste(self, event=None):
         """
-        Trata a colagem de texto na nota registrando separadores de Undo (Ctrl+Z)
-        para que seja possível desfazer a colagem de uma só vez.
+        Trata a colagem de texto na nota com alta performance (destaque incremental apenas
+        nas linhas coladas, cálculo de índice em Python puro e separador de Undo).
         """
         text_widget = self.txt_content._textbox
         try:
@@ -2477,6 +2499,9 @@ class NotesView(ctk.CTkFrame):
 
         if not clipboard_text:
             return "break"
+
+        if "\r" in clipboard_text:
+            clipboard_text = clipboard_text.replace("\r\n", "\n").replace("\r", "\n")
 
         commit_history_before_action(self.txt_content)
         try:
@@ -2488,8 +2513,19 @@ class NotesView(ctk.CTkFrame):
             text_widget.delete("sel.first", "sel.last")
 
         start_pos = text_widget.index("insert")
+        s_line_str, s_col_str = start_pos.split(".")
+        s_line, s_col = int(s_line_str), int(s_col_str)
+
         text_widget.insert(start_pos, clipboard_text)
-        pasted_end = text_widget.index(f"{start_pos} + {len(clipboard_text)} chars")
+
+        nl_count = clipboard_text.count("\n")
+        if nl_count == 0:
+            end_line = s_line
+            end_col = s_col + len(clipboard_text)
+        else:
+            end_line = s_line + nl_count
+            end_col = len(clipboard_text) - clipboard_text.rfind("\n") - 1
+        pasted_end = f"{end_line}.{end_col}"
         text_widget.mark_set("insert", pasted_end)
 
         try:
@@ -2497,11 +2533,9 @@ class NotesView(ctk.CTkFrame):
         except Exception:
             pass
 
-        auto_highlight_content(self.txt_content)
+        auto_highlight_range(self.txt_content, f"{s_line}.0", f"{end_line}.end")
         record_history_after_action(self.txt_content)
         text_widget.mark_set("insert", pasted_end)
-        text_widget.see(pasted_end)
-        text_widget.update_idletasks()
         text_widget.see(pasted_end)
         text_widget.focus_set()
         self._on_field_modified()
@@ -2526,6 +2560,8 @@ class NotesView(ctk.CTkFrame):
     def _configure_spellcheck_tags(self):
         try:
             mode = ctk.get_appearance_mode()
+            if self._spell_tag_mode == mode:
+                return
             is_dark = (mode == "Dark")
             danger_color = config.COLORS["danger"][1 if is_dark else 0]
             self.txt_content._textbox.tag_configure(
@@ -2533,10 +2569,11 @@ class NotesView(ctk.CTkFrame):
                 underline=True,
                 underlinefg=danger_color,
             )
+            self._spell_tag_mode = mode
         except Exception:
             pass
 
-    def _schedule_spellcheck(self):
+    def _schedule_spellcheck(self, delay_ms: int = 550):
         if not self.spellcheck_enabled.get() or not self.spell_service.is_available:
             self._clear_spelling_tags()
             return
@@ -2547,7 +2584,7 @@ class NotesView(ctk.CTkFrame):
             except Exception:
                 pass
 
-        self.spellcheck_timer_id = self.after(400, self._run_spellcheck)
+        self.spellcheck_timer_id = self.after(delay_ms, self._start_async_spellcheck)
 
     def _clear_spelling_tags(self):
         try:
@@ -2555,7 +2592,7 @@ class NotesView(ctk.CTkFrame):
         except Exception:
             pass
 
-    def _run_spellcheck(self):
+    def _start_async_spellcheck(self):
         self.spellcheck_timer_id = None
         try:
             if not self.winfo_exists() or not self.txt_content.winfo_exists():
@@ -2567,8 +2604,10 @@ class NotesView(ctk.CTkFrame):
             self._clear_spelling_tags()
             return
 
-        self._configure_spellcheck_tags()
         text = self.txt_content.get("1.0", "end-1c")
+        self._spellcheck_gen += 1
+        gen = self._spellcheck_gen
+
         if not text or not text.strip():
             self._clear_spelling_tags()
             lang = self.spell_service.active_language or "pt-BR"
@@ -2578,21 +2617,57 @@ class NotesView(ctk.CTkFrame):
             )
             return
 
-        errors = self.spell_service.check_text(text)
+        if hasattr(self.spell_service, "check_text_async"):
+            def _on_worker_done(_req_id: int, errors):
+                try:
+                    if self.winfo_exists():
+                        self.after(0, lambda g=gen, t=text, e=errors: self._apply_spellcheck_results(g, t, e))
+                except Exception:
+                    pass
+
+            self.spell_service.check_text_async(text, _on_worker_done)
+        else:
+            errors = self.spell_service.check_text(text)
+            self._apply_spellcheck_results(gen, text, errors)
+
+    def _apply_spellcheck_results(self, gen: int, checked_text: str, errors):
+        try:
+            if gen != self._spellcheck_gen:
+                return
+            if not self.winfo_exists() or not self.txt_content.winfo_exists():
+                return
+            if not self.spellcheck_enabled.get() or not self.spell_service.is_available:
+                self._clear_spelling_tags()
+                return
+        except Exception:
+            return
+
+        self._configure_spellcheck_tags()
+        tb = self.txt_content._textbox
         self._clear_spelling_tags()
 
-        tb = self.txt_content._textbox
         active_errors_count = 0
-        for err in errors:
-            start_idx = f"1.0 + {err.start} chars"
-            end_idx = f"1.0 + {err.start + err.length} chars"
-            try:
-                if any(t.startswith("syntax_") for t in tb.tag_names(start_idx)):
-                    continue
-                tb.tag_add("spelling_error", start_idx, end_idx)
+        if errors:
+            mapper = OffsetMapper(checked_text, base_line=1, base_col=0)
+            existing_tags = set(tb.tag_names())
+            has_syntax_tags = any(t in existing_tags for t in ALL_SYNTAX_TAGS)
+
+            flat_indices: List[str] = []
+            for err in errors:
+                start_idx = mapper.to_tk(err.start)
+                if has_syntax_tags:
+                    try:
+                        if any(t.startswith("syntax_") for t in tb.tag_names(start_idx)):
+                            continue
+                    except Exception:
+                        pass
+                end_idx = mapper.to_tk(err.start + err.length)
+                flat_indices.append(start_idx)
+                flat_indices.append(end_idx)
                 active_errors_count += 1
-            except Exception:
-                pass
+
+            if flat_indices:
+                _apply_tag_batches(tb, {"spelling_error": flat_indices})
 
         lang = self.spell_service.active_language or "pt-BR"
         if active_errors_count == 0:
@@ -2607,6 +2682,33 @@ class NotesView(ctk.CTkFrame):
                 text=f"🔤 {qtd} {sufixo}",
                 text_color=config.COLORS["danger"],
             )
+
+    def _run_spellcheck(self):
+        self.spellcheck_timer_id = None
+        try:
+            if not self.winfo_exists() or not self.txt_content.winfo_exists():
+                return
+        except Exception:
+            return
+
+        if not self.spellcheck_enabled.get() or not self.spell_service.is_available:
+            self._clear_spelling_tags()
+            return
+
+        text = self.txt_content.get("1.0", "end-1c")
+        self._spellcheck_gen += 1
+        gen = self._spellcheck_gen
+        if not text or not text.strip():
+            self._clear_spelling_tags()
+            lang = self.spell_service.active_language or "pt-BR"
+            self.btn_spell_status.configure(
+                text=f"🔤 Ortografia: {lang}",
+                text_color=config.COLORS["text_muted"],
+            )
+            return
+
+        errors = self.spell_service.check_text(text)
+        self._apply_spellcheck_results(gen, text, errors)
 
     def _toggle_spellcheck(self):
         if not self.spell_service.is_available:
